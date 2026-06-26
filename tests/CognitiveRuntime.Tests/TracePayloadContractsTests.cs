@@ -17,6 +17,9 @@ public sealed class TracePayloadContractsTests
         Assert.Equal("callId", TracePayloadKeys.CallId);
         Assert.Equal("attempt", TracePayloadKeys.Attempt);
         Assert.Equal("contextNodeIds", TracePayloadKeys.ContextNodeIds);
+        Assert.Equal("projectionId", TracePayloadKeys.ProjectionId);
+        Assert.Equal("sourceIds", TracePayloadKeys.SourceIds);
+        Assert.Equal("itemCount", TracePayloadKeys.ItemCount);
         Assert.Equal("outcome", TracePayloadKeys.Outcome);
         Assert.Equal("durationMs", TracePayloadKeys.DurationMs);
         Assert.Equal("name", TracePayloadKeys.Name);
@@ -57,6 +60,11 @@ public sealed class TracePayloadContractsTests
             TracePayloadKeys.ContextNodeIds,
             TracePayloadKeys.Dependencies,
             TracePayloadKeys.DurationMs);
+        AssertEventKeys(events, TraceEventNames.ContextProjected,
+            TracePayloadKeys.ProjectionId,
+            TracePayloadKeys.NodeId,
+            TracePayloadKeys.SourceIds,
+            TracePayloadKeys.ItemCount);
         AssertEventKeys(events, TraceEventNames.ModelCompleted,
             TracePayloadKeys.CallId,
             TracePayloadKeys.NodeId,

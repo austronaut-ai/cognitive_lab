@@ -2280,7 +2280,8 @@ Research priority:
 
 1. `RB-008` Bounded scatter-gather orchestration. (Research complete; promoted,
    implementation gated on `RS-006`.)
-2. `RB-009` Context projection and information barriers.
+2. `RB-009` Context projection and information barriers. (Research complete; v1
+   implemented; remainder deferred behind `TP-009` and `RB-007`.)
 3. `RB-010` Static boundedness analysis.
 4. `RB-011` Speculative execution with deterministic commit.
 5. `RB-012` Model portfolio scheduling.
@@ -2477,6 +2478,16 @@ Guardrails:
 - No worker may directly invoke another worker.
 
 ### RB-009 - Context projection and information barriers
+
+Research status: `complete` on 2026-06-25; v1 implemented. Today's full-context
+assembly is now a runtime-owned, default-deny `ContextProjection` computed by a
+shared `ContextProjector` before provider serialization, scoped to the `input`
+and `prior-result` sources and traced with a bounded `context.projected` event.
+Redaction/truncation transforms and the evidence and blackboard sources remain
+deferred behind `TP-009` and `RB-007`.
+
+Design note:
+[`docs/research/RB-009-context-projection-and-information-barriers.md`](docs/research/RB-009-context-projection-and-information-barriers.md)
 
 Research typed projections that give each execution node only the input,
 prior results, evidence, and blackboard entries declared by the pattern plan.

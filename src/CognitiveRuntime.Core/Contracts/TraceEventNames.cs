@@ -22,6 +22,8 @@ public static class TraceEventNames
     public const string PhaseStarted = "phase.started";
     public const string PhaseCompleted = "phase.completed";
 
+    public const string ContextProjected = "context.projected";
+
     public const string ModelCalled = "model.called";
     public const string ModelCompleted = "model.completed";
     public const string ModelFailed = "model.failed";
