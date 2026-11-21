@@ -111,7 +111,7 @@ public static class CliApplication
                         ?? "https://openrouter.ai/api/v1",
                     Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"),
                     Environment.GetEnvironmentVariable("OPENROUTER_MODEL")
-                        ?? "openai/gpt-5",
+                        ?? "openai/gpt-6.2-sol",
                     Environment.GetEnvironmentVariable("OPENROUTER_REASONING_EFFORT")
                         ?? "medium"))
         };

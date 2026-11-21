@@ -152,7 +152,7 @@ strict claim/evidence schema:
 
 ```powershell
 $env:OPENROUTER_API_KEY = "..."
-$env:OPENROUTER_MODEL = "openai/gpt-5"
+$env:OPENROUTER_MODEL = "openai/gpt-6.2-sol"
 
 dotnet run --project projects/document-distiller/src/DocumentDistiller.Cli -- `
   --input projects/document-distiller/examples/agent-systems `

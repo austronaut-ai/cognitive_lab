@@ -392,12 +392,12 @@ Copilot plan; Copilot Free accounts are limited to lower-tier models such as
 
 OpenRouter calls its OpenAI-compatible Responses API
 (`POST /responses`) and provides access to models from multiple vendors
-(including GPT-5.x and Claude Opus 4.x) through a single API key:
+(including GPT-6.x and Claude Opus 5.x) through a single API key:
 
 ```powershell
 $secureKey = Read-Host "OpenRouter API key" -AsSecureString
 $env:OPENROUTER_API_KEY = [System.Net.NetworkCredential]::new("", $secureKey).Password
-$env:OPENROUTER_MODEL = "openai/gpt-5"
+$env:OPENROUTER_MODEL = "openai/gpt-6.2-sol"
 
 dotnet run --project src/CognitiveRuntime.Cli -- `
   --mode frame `
@@ -413,7 +413,7 @@ OPENROUTER_ENABLE_CODE_EXECUTION=false
 ```
 
 `OPENROUTER_MODEL` must be a valid OpenRouter model ID, for example
-`openai/gpt-5` or `anthropic/claude-opus-4.5`.
+`openai/gpt-6.2-sol` or `anthropic/claude-opus-5.5`.
 
 When `OPENROUTER_ENABLE_CODE_EXECUTION=true`, the openrouter provider attaches
 OpenAI's hosted `code_interpreter` tool (`{ type: "code_interpreter",
@@ -421,7 +421,8 @@ container: { type: "auto" } }`) to each Responses API request. The provider
 runs the sandboxed code on OpenRouter's infrastructure and returns the result
 inline in the model's message; this is separate from the runtime's own
 `IToolProvider`/`ToolPolicy`/`ToolExecutor` boundary described under
-"Tool Safety", and is currently only confirmed to work with `openai/gpt-5`.
+"Tool Safety". It was confirmed with `openai/gpt-5`, which OpenRouter retires on
+2026-12-11; it has not been re-confirmed with `openai/gpt-6.2-sol` yet.
 
 Azure Foundry calls the same Responses API shape as OpenRouter, against an
 Azure OpenAI / Microsoft Foundry resource
