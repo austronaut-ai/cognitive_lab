@@ -23,6 +23,13 @@ public sealed record EvalExecutionPlan(
     IReadOnlyList<EvalExecutionNode> Nodes,
     string AuthoritativeNodeId);
 
+/// <summary>
+/// One executed node paired with the loaded phase that produced it and its raw
+/// output. Carries each node's own resolved contract into evaluation, so an
+/// earlier pipeline stage or scatter branch is checked against its own mode.
+/// </summary>
+public sealed record EvalPhaseInput(string NodeId, LoadedPhase Phase, PhaseResult Result);
+
 public sealed record EvalContext(
     RunArtifactPaths Artifacts,
     LoadedMode Mode,
@@ -31,4 +38,5 @@ public sealed record EvalContext(
     EvalPlan Plan,
     IReadOnlyDictionary<string, PhaseResult>? NodeResultsById = null,
     string? AuthoritativeContent = null,
-    IReadOnlyList<RunArtifactState>? ArtifactLedger = null);
+    IReadOnlyList<RunArtifactState>? ArtifactLedger = null,
+    IReadOnlyList<EvalPhaseInput>? ExecutedPhases = null);

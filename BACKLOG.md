@@ -1288,6 +1288,8 @@ cannot declare different structural expectations.
 Outcome: Each phase may declare its own contract while final evaluation still
 targets the authoritative revision; missing contracts receive explicit defaults.
 
+Status: Complete.
+
 Acceptance:
 
 - Main, critic, and revision may declare different structural contracts.

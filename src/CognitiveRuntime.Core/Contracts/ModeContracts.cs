@@ -30,6 +30,31 @@ public sealed record ModePhaseManifest
     public PhaseKind Kind { get; init; }
 
     public string Prompt { get; init; } = string.Empty;
+
+    private readonly OutputContract? _outputContract;
+
+    /// <summary>
+    /// The phase's own structural contract, or null when the manifest omits it.
+    /// An omitted contract takes the runtime default (see
+    /// <see cref="CognitiveRuntime.Core.Modes.PhaseContractDefaults"/>); an explicit JSON null is rejected.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OutputContract? OutputContract
+    {
+        get => _outputContract;
+        init
+        {
+            _outputContract = value;
+            OutputContractSpecified = true;
+        }
+    }
+
+    /// <summary>
+    /// True when the manifest supplied <c>outputContract</c>, even as null.
+    /// Internal so the serializer never maps it: a manifest that spells it out is
+    /// rejected as an unknown property like any other.
+    /// </summary>
+    internal bool OutputContractSpecified { get; private init; }
 }
 
 public sealed record OutputContract
@@ -45,7 +70,18 @@ public sealed record LoadedMode(
     ModeManifest Manifest,
     IReadOnlyList<LoadedPhase> Phases);
 
-public sealed record LoadedPhase(string Name, PhaseKind Kind, string Prompt);
+public sealed record LoadedPhase(string Name, PhaseKind Kind, string Prompt)
+{
+    /// <summary>
+    /// The structural contract that applies to this phase's output after the
+    /// runtime defaults are resolved at load time. Null means the phase has no
+    /// structural contract and is not checked.
+    /// </summary>
+    public OutputContract? OutputContract { get; init; }
+
+    /// <summary>True when the manifest declared this phase's contract itself.</summary>
+    public bool DeclaresOutputContract { get; init; }
+}
 
 public sealed record ModeCatalogPhase(string Name, PhaseKind Kind);
 

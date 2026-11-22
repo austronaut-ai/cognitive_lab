@@ -542,6 +542,18 @@ public sealed class ModeLoaderTests
     [InlineData("\"version\": 1", "\"version\": 1, \"descripton\": \"typo\"", "descripton")]
     [InlineData("\"prompt\": \"prompts/main.md\"", "\"prompt\": \"prompts/main.md\", \"promt\": \"x\"", "promt")]
     [InlineData("\"minimumLength\": 10", "\"minimumLength\": 10, \"minimumLenght\": 5", "minimumLenght")]
+    [InlineData(
+        "\"prompt\": \"prompts/critic.md\"",
+        "\"prompt\": \"prompts/critic.md\", \"outputContract\": { \"requiredHeadings\": [\"## Findings\"] }, \"outputContact\": {}",
+        "outputContact")]
+    [InlineData(
+        "\"prompt\": \"prompts/critic.md\"",
+        "\"prompt\": \"prompts/critic.md\", \"outputContract\": { \"requiredHeadings\": [\"## Findings\"], \"requiredHedings\": [] }",
+        "requiredHedings")]
+    [InlineData(
+        "\"prompt\": \"prompts/critic.md\"",
+        "\"prompt\": \"prompts/critic.md\", \"outputContractSpecified\": true",
+        "outputContractSpecified")]
     public async Task LoadAsync_RejectsUnknownManifestProperty(
         string target,
         string replacement,
@@ -674,6 +686,122 @@ public sealed class ModeLoaderTests
         Assert.Equal(headings, mode.Manifest.OutputContract.RequiredHeadings);
         Assert.Equal(200, mode.Manifest.OutputContract.MinimumLength);
     }
+
+    [Theory]
+    [MemberData(nameof(CheckedInCases))]
+    public async Task LoadAsync_CheckedInModesResolveLegacyPhaseContractDefaults(
+        string modeName,
+        string? lens)
+    {
+        var mode = await new FileModeLoader(CheckedInModeCases.ModesRoot).LoadAsync(modeName, lens);
+
+        Assert.All(mode.Manifest.Phases, phase => Assert.Null(phase.OutputContract));
+        Assert.All(mode.Phases, phase => Assert.False(phase.DeclaresOutputContract));
+        Assert.Same(mode.Manifest.OutputContract, PhaseOf(mode, PhaseKind.Main).OutputContract);
+        Assert.Same(mode.Manifest.OutputContract, PhaseOf(mode, PhaseKind.Revision).OutputContract);
+        Assert.Null(PhaseOf(mode, PhaseKind.Critic).OutputContract);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ResolvesDistinctPhaseOutputContracts()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(
+            phases:
+            [
+                CreatePhase("main", PhaseKind.Main) with { OutputContract = Contract(10, "## Draft") },
+                CreatePhase("critic", PhaseKind.Critic) with { OutputContract = Contract(20, "## Findings") },
+                CreatePhase("revision", PhaseKind.Revision) with
+                {
+                    OutputContract = Contract(30, "## Decision", "## Rationale")
+                }
+            ]);
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.All(mode.Phases, phase => Assert.True(phase.DeclaresOutputContract));
+        Assert.Equal(["## Draft"], PhaseOf(mode, PhaseKind.Main).OutputContract!.RequiredHeadings);
+        Assert.Equal(10, PhaseOf(mode, PhaseKind.Main).OutputContract!.MinimumLength);
+        Assert.Equal(["## Findings"], PhaseOf(mode, PhaseKind.Critic).OutputContract!.RequiredHeadings);
+        Assert.Equal(20, PhaseOf(mode, PhaseKind.Critic).OutputContract!.MinimumLength);
+        Assert.Equal(
+            ["## Decision", "## Rationale"],
+            PhaseOf(mode, PhaseKind.Revision).OutputContract!.RequiredHeadings);
+        Assert.Equal(30, PhaseOf(mode, PhaseKind.Revision).OutputContract!.MinimumLength);
+        // The mode-level contract is unchanged by phase declarations.
+        Assert.Equal(100, mode.Manifest.OutputContract.MinimumLength);
+    }
+
+    [Fact]
+    public async Task LoadAsync_PhaseContractOmittingMinimumLengthDefaultsToOne()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode();
+        EditPhase(dir, 1, phase => phase["outputContract"] = JsonNode.Parse(
+            """{ "requiredHeadings": ["## Findings"] }"""));
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        var critic = PhaseOf(mode, PhaseKind.Critic);
+        Assert.True(critic.DeclaresOutputContract);
+        Assert.Equal(1, critic.OutputContract!.MinimumLength);
+        // Undeclared phases keep the runtime defaults.
+        Assert.False(PhaseOf(mode, PhaseKind.Main).DeclaresOutputContract);
+        Assert.Same(mode.Manifest.OutputContract, PhaseOf(mode, PhaseKind.Main).OutputContract);
+    }
+
+    [Theory]
+    [InlineData("null", "not null")]
+    [InlineData("\"## Findings\"", "outputContract")]
+    [InlineData("[]", "outputContract")]
+    [InlineData("{}", "at least one heading")]
+    [InlineData("""{ "requiredHeadings": null }""", "requiredHeadings")]
+    [InlineData("""{ "requiredHeadings": [] }""", "at least one heading")]
+    [InlineData("""{ "requiredHeadings": [null] }""", "at least one heading")]
+    [InlineData("""{ "requiredHeadings": ["  "] }""", "at least one heading")]
+    [InlineData("""{ "requiredHeadings": ["## Findings"], "minimumLength": 0 }""", "positive minimum length")]
+    [InlineData("""{ "requiredHeadings": ["## Findings"], "minimumLength": -3 }""", "positive minimum length")]
+    [InlineData("""{ "requiredHeadings": "## Findings" }""", "requiredHeadings")]
+    [InlineData("""{ "requiredHeadings": ["## Findings"], "minimumLength": true }""", "minimumLength")]
+    public async Task LoadAsync_RejectsInvalidPhaseOutputContract(string contractJson, string expected)
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode();
+        EditPhase(dir, 1, phase => phase["outputContract"] = JsonNode.Parse(contractJson));
+
+        var exception = await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("frame"));
+
+        Assert.Contains(expected, exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_InvalidPhaseContractDiagnosticNamesPhase()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode();
+        EditPhase(dir, 2, phase => phase["outputContract"] = JsonNode.Parse(
+            """{ "requiredHeadings": [] }"""));
+
+        var exception = await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("frame"));
+
+        Assert.Contains("Phase 3 ('revision') field 'outputContract'", exception.Message);
+    }
+
+    private static void EditPhase(string modeDirectory, int index, Action<JsonObject> edit)
+    {
+        var path = Path.Combine(modeDirectory, "mode.json");
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        edit(root["phases"]![index]!.AsObject());
+        File.WriteAllText(path, root.ToJsonString());
+    }
+
+    private static OutputContract Contract(int minimumLength, params string[] headings) =>
+        new() { RequiredHeadings = [.. headings], MinimumLength = minimumLength };
+
+    private static LoadedPhase PhaseOf(LoadedMode mode, PhaseKind kind) =>
+        Assert.Single(mode.Phases, phase => phase.Kind == kind);
 
     [Fact]
     public async Task LoadAsync_WarcraftLens_UsesWarcraftPromptsForEveryPhase()
