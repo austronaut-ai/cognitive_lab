@@ -614,6 +614,7 @@ public sealed class ModeLoaderTests
               },
             }
             """);
+        WriteDocumentation(modeDirectory, "# frame\n\nmain -> critic -> revision\n\n`## Problem`\n");
         var loader = new FileModeLoader(workspace.ModesRoot);
 
         var mode = await loader.LoadAsync("frame");
@@ -875,6 +876,146 @@ public sealed class ModeLoaderTests
 
         Assert.Equal("frame", mode.Manifest.Name);
     }
+
+    [Fact]
+    public async Task LoadAsync_RequiresModeDocumentation()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode();
+        File.Delete(Path.Combine(dir, "MODE.md"));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Equal("Required mode file 'MODE.md' was not found.", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t\r\n  \n")]
+    public async Task LoadAsync_RejectsBlankModeDocumentation(string documentation)
+    {
+        using var workspace = new TestWorkspace();
+        WriteDocumentation(workspace.CreateMode(), documentation);
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("Mode 'frame' documentation 'MODE.md'", exception.Message);
+        Assert.Contains("empty or contains only whitespace", exception.Message);
+        Assert.Contains("missing phase names 'main', 'critic', 'revision'", exception.Message);
+        Assert.Contains(
+            "missing output headings '## Problem', '## Objective', '## Constraints', " +
+            "'## Unknowns', '## Next Actions'",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_AcceptsExactDocumentationMentions()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode(
+            phases:
+            [
+                Phase("Draft-1", PhaseKind.Main, "prompts/main.md"),
+                Phase("review", PhaseKind.Critic, "prompts/critic.md"),
+                Phase("final2", PhaseKind.Revision, "prompts/revision.md") with
+                {
+                    OutputContract = Contract(1, "## Decision", "## Rationale")
+                }
+            ]);
+        // Terse, unstructured text with no Output section: a partial token (pre-draft-1) precedes
+        // the standalone mention, names differ in case and touch punctuation and both document
+        // boundaries, and headings are split between inline code and a CRLF fenced block.
+        WriteDocumentation(
+            dir,
+            "final2 pre-draft-1 then DRAFT-1, (Review) `## Decision`\r\n```text\r\n## Rationale\r\n```\r\nfinal2");
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.Equal(["Draft-1", "review", "final2"], mode.Phases.Select(phase => phase.Name));
+    }
+
+    [Fact]
+    public async Task LoadAsync_ReportsAllMissingDocumentationMentions()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode(
+            phases:
+            [
+                Phase("draft", PhaseKind.Main, "prompts/main.md"),
+                Phase("review", PhaseKind.Critic, "prompts/critic.md"),
+                Phase("final", PhaseKind.Revision, "prompts/revision.md")
+            ]);
+        // Phase kinds are decoys, names appear only inside larger tokens, and headings differ
+        // in case, spacing, or hashes; only '## Unknowns' is present exactly.
+        WriteDocumentation(
+            dir,
+            "# frame\n\nKinds: main, critic, revision.\n" +
+            "pre-draft draft_extra reviewer review2 finalize -final\n" +
+            "## problem\n##  Objective\nConstraints\n## Unknowns\n");
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("Mode 'frame' documentation 'MODE.md'", exception.Message);
+        Assert.DoesNotContain("empty", exception.Message);
+        Assert.Contains("missing phase names 'draft', 'review', 'final';", exception.Message);
+        Assert.Contains(
+            "missing output headings '## Problem', '## Objective', '## Constraints', '## Next Actions'.",
+            exception.Message);
+        Assert.DoesNotContain("'## Unknowns'", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_DocumentationUsesResolvedRevisionContract()
+    {
+        const string names = "main critic revision\n";
+        const string modeHeadings =
+            "## Problem\n## Objective\n## Constraints\n## Unknowns\n## Next Actions\n";
+        using var workspace = new TestWorkspace();
+        var withOverride = workspace.CreateMode(
+            "override",
+            phases:
+            [
+                CreatePhase("main", PhaseKind.Main) with { OutputContract = Contract(1, "## Draft") },
+                CreatePhase("critic", PhaseKind.Critic) with { OutputContract = Contract(1, "## Findings") },
+                CreatePhase("revision", PhaseKind.Revision) with { OutputContract = Contract(1, "## Decision") }
+            ]);
+        var inherited = workspace.CreateMode(
+            "inherited",
+            phases:
+            [
+                CreatePhase("main", PhaseKind.Main) with { OutputContract = Contract(1, "## Draft") },
+                CreatePhase("critic", PhaseKind.Critic) with { OutputContract = Contract(1, "## Findings") },
+                CreatePhase("revision", PhaseKind.Revision)
+            ]);
+        var loader = new FileModeLoader(workspace.ModesRoot);
+
+        // The revision override is the only heading requirement; main and critic add none.
+        WriteDocumentation(withOverride, names + "## Decision\n");
+        await loader.LoadAsync("override");
+
+        WriteDocumentation(withOverride, names + modeHeadings + "## Draft\n## Findings\n");
+        var overrideFailure = await Assert.ThrowsAsync<ModeLoadException>(
+            () => loader.LoadAsync("override"));
+        Assert.Contains("missing output headings '## Decision'.", overrideFailure.Message);
+        Assert.DoesNotContain("## Problem", overrideFailure.Message);
+
+        // Without an override the revision falls back to the mode-level contract.
+        WriteDocumentation(inherited, names + modeHeadings);
+        await loader.LoadAsync("inherited");
+
+        WriteDocumentation(inherited, names + "## Draft\n## Findings\n");
+        var inheritedFailure = await Assert.ThrowsAsync<ModeLoadException>(
+            () => loader.LoadAsync("inherited"));
+        Assert.Contains(
+            "missing output headings '## Problem', '## Objective', '## Constraints', " +
+            "'## Unknowns', '## Next Actions'.",
+            inheritedFailure.Message);
+        Assert.DoesNotContain("## Draft", inheritedFailure.Message);
+        Assert.DoesNotContain("## Findings", inheritedFailure.Message);
+    }
+
+    internal static void WriteDocumentation(string modeDirectory, string documentation) =>
+        File.WriteAllText(Path.Combine(modeDirectory, "MODE.md"), documentation);
 
     internal static void MoveDefaultPromptsToVariants(string modeDirectory, params string[] lenses)
     {

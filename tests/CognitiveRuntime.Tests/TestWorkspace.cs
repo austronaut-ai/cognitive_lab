@@ -37,9 +37,6 @@ internal sealed class TestWorkspace : IDisposable
         Directory.CreateDirectory(promptsDirectory);
 
         File.WriteAllText(
-            Path.Combine(modeDirectory, "MODE.md"),
-            $"# {name}{Environment.NewLine}");
-        File.WriteAllText(
             Path.Combine(promptsDirectory, "main.md"),
             "Produce the declared output contract.");
         File.WriteAllText(
@@ -82,6 +79,7 @@ internal sealed class TestWorkspace : IDisposable
             }
         };
 
+        File.WriteAllText(Path.Combine(modeDirectory, "MODE.md"), DescribeMode(name, manifest));
         File.WriteAllText(
             Path.Combine(modeDirectory, "mode.json"),
             JsonSerializer.Serialize(
@@ -97,6 +95,25 @@ internal sealed class TestWorkspace : IDisposable
                 }));
 
         return modeDirectory;
+    }
+
+    /// <summary>
+    /// Writes documentation that satisfies the loader's MODE.md rules for <paramref name="manifest"/>: every
+    /// phase name and every heading of the resolved revision contract. Tolerates deliberately invalid
+    /// manifests so their own diagnostics still surface.
+    /// </summary>
+    public static string DescribeMode(string name, ModeManifest manifest)
+    {
+        var phases = (manifest.Phases ?? []).Where(phase => phase is not null).ToList();
+        var revisionContract = phases.FirstOrDefault(phase => phase.Kind == PhaseKind.Revision)?.OutputContract
+            ?? manifest.OutputContract;
+        var headings = revisionContract?.RequiredHeadings ?? [];
+        var lines = new List<string> { $"# {name}", string.Empty, "Phases:" };
+        lines.AddRange(phases.Select(phase => $"- {phase.Name}"));
+        lines.AddRange([string.Empty, "## Output", string.Empty, "```text"]);
+        lines.AddRange(headings.Where(heading => heading is not null));
+        lines.Add("```");
+        return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     public void Dispose()

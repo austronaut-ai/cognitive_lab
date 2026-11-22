@@ -101,9 +101,88 @@ public sealed class FileModeLoader : IModeLoader
         var documentation = await File.ReadAllTextAsync(
             documentationPath,
             cancellationToken);
+        ValidateDocumentation(modeName, documentation, phases);
 
         return new LoadedMode(modeDirectory, documentation, manifest, phases);
     }
+
+    /// <summary>
+    /// Checks that <c>MODE.md</c> is not blank, names every configured phase as a whole word
+    /// (ordinal, case-insensitive), and contains each required heading of the authoritative
+    /// revision contract verbatim (ordinal, case-sensitive, hashes included). Prose quality,
+    /// layout, and ordering are not checked. Every missing item is reported in one diagnostic.
+    /// </summary>
+    private static void ValidateDocumentation(
+        string modeName,
+        string documentation,
+        IReadOnlyList<LoadedPhase> phases)
+    {
+        var missingPhases = phases
+            .Select(phase => phase.Name)
+            .Where(name => !ContainsWholeWord(documentation, name))
+            .ToList();
+
+        // Manifest validation guarantees one revision phase; PhaseContractDefaults guarantees its contract.
+        var revisionContract = phases.Single(phase => phase.Kind == PhaseKind.Revision).OutputContract!;
+        var missingHeadings = revisionContract.RequiredHeadings
+            .Where(heading => !documentation.Contains(heading, StringComparison.Ordinal))
+            .ToList();
+
+        var blank = string.IsNullOrWhiteSpace(documentation);
+        if (!blank && missingPhases.Count == 0 && missingHeadings.Count == 0)
+        {
+            return;
+        }
+
+        var problems = new List<string>();
+        if (blank)
+        {
+            problems.Add("the file is empty or contains only whitespace");
+        }
+
+        if (missingPhases.Count > 0)
+        {
+            problems.Add($"missing phase names {Quote(missingPhases)}");
+        }
+
+        if (missingHeadings.Count > 0)
+        {
+            problems.Add($"missing output headings {Quote(missingHeadings)}");
+        }
+
+        throw new ModeLoadException(
+            $"Mode '{modeName}' documentation 'MODE.md' does not describe the configured mode: " +
+            string.Join("; ", problems) + ". MODE.md must name each phase and contain each " +
+            "required heading of the revision output contract exactly as written.");
+    }
+
+    private static string Quote(IEnumerable<string> values) =>
+        string.Join(", ", values.Select(value => $"'{value}'"));
+
+    /// <summary>
+    /// True when <paramref name="word"/> occurs in <paramref name="text"/> (ordinal, ignoring case) with no
+    /// letter, digit, underscore, or hyphen directly on either side, so <c>draft</c> does not match inside
+    /// <c>pre-draft</c> or <c>draft_extra</c>. A partial occurrence does not stop the search.
+    /// </summary>
+    private static bool ContainsWholeWord(string text, string word)
+    {
+        for (var start = text.IndexOf(word, StringComparison.OrdinalIgnoreCase);
+             start >= 0;
+             start = text.IndexOf(word, start + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            var end = start + word.Length;
+            if ((start == 0 || !IsWordContinuation(text[start - 1])) &&
+                (end == text.Length || !IsWordContinuation(text[end])))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWordContinuation(char character) =>
+        char.IsLetterOrDigit(character) || character is '_' or '-';
 
     /// <summary>
     /// Loads every immediate child directory of the modes root through

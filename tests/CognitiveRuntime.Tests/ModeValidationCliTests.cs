@@ -651,4 +651,24 @@ public sealed class ModeValidationCliTests
         Assert.Contains("cancelled", result.Err);
         Assert.Empty(Directory.GetFileSystemEntries(workspace.OutputRoot));
     }
+
+    [Fact]
+    public async Task Validate_InconsistentDocumentation_ReturnsOneWithAllMissingMentions()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        ModeLoaderTests.WriteDocumentation(dir, "# frame\n\nOnly the main phase and `## Problem`.\n");
+
+        var result = await RunAsync(
+            "modes", "validate", "frame", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Out);
+        Assert.Contains("MODE.md", result.Err);
+        Assert.Contains("missing phase names 'critic', 'revision'", result.Err);
+        Assert.Contains(
+            "missing output headings '## Objective', '## Constraints', '## Unknowns', '## Next Actions'",
+            result.Err);
+        Assert.Empty(Directory.GetFileSystemEntries(workspace.OutputRoot));
+    }
 }
