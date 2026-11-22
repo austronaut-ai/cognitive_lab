@@ -83,6 +83,24 @@ public sealed class ModeListCliTests
     }
 
     [Fact]
+    public async Task List_InconsistentDocumentation_ReportsInvalidModeAndListsValidModes()
+    {
+        using var workspace = new TestWorkspace();
+        var invalid = workspace.CreateMode("alpha");
+        ModeLoaderTests.WriteDocumentation(invalid, "# alpha\n\nmain critic revision\n");
+        workspace.CreateMode("beta");
+
+        var result = await RunAsync("list", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.DoesNotContain("alpha", result.Out);
+        Assert.Contains("Mode: beta", result.Out);
+        Assert.Contains("Mode 'alpha' is invalid:", result.Err);
+        Assert.Contains("MODE.md", result.Err);
+        Assert.Contains("missing output headings '## Problem'", result.Err);
+    }
+
+    [Fact]
     public async Task List_DirectoryWithoutManifest_IsReportedAndLaterModesStillListed()
     {
         using var workspace = new TestWorkspace();

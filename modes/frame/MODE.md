@@ -14,3 +14,16 @@ main -> critic -> revision
 The revision preserves the frame output contract while addressing material
 critic findings. The runtime, not the model, decides phase order, evaluation,
 artifact paths, and completion.
+
+## Output
+
+The final result is the revision, which must contain these headings from the
+output contract in `mode.json`:
+
+```text
+## Problem
+## Objective
+## Constraints
+## Unknowns
+## Next Actions
+```

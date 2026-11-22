@@ -109,6 +109,28 @@ Manifest rules enforced by validation (and by every run):
   and rules. An explicit `null` is rejected; omit the field to take the runtime
   default. Unknown properties beside or inside it are rejected like any other.
 
+Documentation rules enforced by the same loader (so `modes validate`,
+`modes list`, and every run agree). They check only that `MODE.md` mentions
+what `mode.json` configures; they do not judge prose, layout, or order:
+
+- `MODE.md` must exist and must not be empty or whitespace-only.
+- Every configured phase name must appear as a whole word, compared ordinally
+  and ignoring case. Letters, digits, `_`, and `-` continue a word, so phase
+  `draft` is not satisfied by `pre-draft` or `draft_extra`; punctuation, spaces,
+  and the start or end of the file end one.
+- Every required heading of the revision phase's resolved output contract (its
+  own `outputContract`, or the mode-level one when it declares none) must
+  appear verbatim, case-sensitive and including its leading `#` characters,
+  for example `## Problem`. It may sit anywhere: ordinary text, inline code, or
+  a fenced block. Main and critic contracts add no documentation requirements.
+- When checks fail, one diagnostic names `MODE.md` and lists every missing
+  phase name and heading.
+- Lens variants share the mode's `MODE.md` and contract, so the same
+  documentation is checked whichever `--lens` is selected.
+
+The shipped modes satisfy these rules with a short `## Output` section that
+lists the contract headings in a fenced `text` block.
+
 Per-phase contract defaults are resolved once when the mode loads
 (`PhaseContractDefaults` in Core), so every consumer sees the same contract
 per phase:

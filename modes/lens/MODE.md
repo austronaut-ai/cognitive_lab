@@ -13,6 +13,19 @@ The revision preserves the lens output contract while addressing material
 critic findings. The runtime remains responsible for phase order, evaluation,
 artifact paths, and completion.
 
+## Output
+
+The final result is the revision, which must contain these headings from the
+output contract in `mode.json`, whichever lens is selected:
+
+```text
+## The Concept
+## The Lens
+## The Mapping
+## Where It Breaks Down
+## Plain Translation
+```
+
 ## Choosing a lens
 
 Unlike other modes, `lens` does not ship a default prompt set under
