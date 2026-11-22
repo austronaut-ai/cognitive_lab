@@ -16,6 +16,13 @@ public sealed class FileModeLoader : IModeLoader
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    private static readonly string[] RequiredPromptReferences =
+    [
+        "prompts/main.md",
+        "prompts/critic.md",
+        "prompts/revision.md"
+    ];
+
     private readonly string _modesRoot;
 
     public FileModeLoader(string modesRoot)
@@ -50,9 +57,6 @@ public sealed class FileModeLoader : IModeLoader
 
         var documentationPath = RequireFile(modeDirectory, "MODE.md");
         var manifestPath = RequireFile(modeDirectory, "mode.json");
-        RequireFile(modeDirectory, ApplyLens("prompts/main.md", lens));
-        RequireFile(modeDirectory, ApplyLens("prompts/critic.md", lens));
-        RequireFile(modeDirectory, ApplyLens("prompts/revision.md", lens));
 
         ModeManifest manifest;
         try
@@ -71,10 +75,14 @@ public sealed class FileModeLoader : IModeLoader
 
         ValidateManifest(modeName, manifest);
 
+        var promptPaths = ResolvePhasePrompts(modeDirectory, manifest, lens);
+        ValidateRequiredPromptCoverage(modeDirectory, promptPaths, lens);
+
         var phases = new List<LoadedPhase>(manifest.Phases.Count);
-        foreach (var phase in manifest.Phases)
+        for (var index = 0; index < manifest.Phases.Count; index++)
         {
-            var promptPath = RequireFile(modeDirectory, ApplyLens(phase.Prompt, lens));
+            var phase = manifest.Phases[index];
+            var promptPath = RequirePromptFile(modeDirectory, promptPaths[index]);
             var prompt = await File.ReadAllTextAsync(promptPath, cancellationToken);
             if (string.IsNullOrWhiteSpace(prompt))
             {
@@ -220,6 +228,16 @@ public sealed class FileModeLoader : IModeLoader
                 "main, critic, revision.");
         }
 
+        for (var index = 0; index < manifest.Phases.Count; index++)
+        {
+            if (!IsSafeName(manifest.Phases[index].Name))
+            {
+                throw new ModeLoadException(
+                    $"Phase {index + 1} name '{manifest.Phases[index].Name}' is invalid: " +
+                    "use one or more ASCII letters, digits, or hyphens.");
+            }
+        }
+
         var duplicatePhase = manifest.Phases
             .GroupBy(phase => phase.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
@@ -227,16 +245,16 @@ public sealed class FileModeLoader : IModeLoader
         if (duplicatePhase is not null)
         {
             throw new ModeLoadException(
-                $"Phase name '{duplicatePhase.Key}' is duplicated.");
+                $"Phase name '{duplicatePhase.Key}' is duplicated (names are compared " +
+                "case-insensitively).");
         }
 
-        foreach (var phase in manifest.Phases)
+        for (var index = 0; index < manifest.Phases.Count; index++)
         {
-            if (string.IsNullOrWhiteSpace(phase.Name) ||
-                string.IsNullOrWhiteSpace(phase.Prompt))
+            if (string.IsNullOrWhiteSpace(manifest.Phases[index].Prompt))
             {
                 throw new ModeLoadException(
-                    "Every phase requires a name and prompt path.");
+                    $"Phase {index + 1} ('{manifest.Phases[index].Name}') requires a prompt path.");
             }
         }
 
@@ -265,14 +283,12 @@ public sealed class FileModeLoader : IModeLoader
     private static string FormatKind(PhaseKind kind) =>
         kind.ToString().ToLowerInvariant();
 
+    private static bool IsSafeName(string? name) =>
+        !string.IsNullOrEmpty(name) &&
+        name.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
+
     private static string RequireFile(string root, string relativePath)
     {
-        if (Path.IsPathRooted(relativePath))
-        {
-            throw new ModeLoadException(
-                $"Mode file path '{relativePath}' must be relative.");
-        }
-
         var path = ResolveChildPath(root, relativePath);
         if (!File.Exists(path))
         {
@@ -281,6 +297,139 @@ public sealed class FileModeLoader : IModeLoader
         }
 
         return path;
+    }
+
+    private static string RequirePromptFile(string modeDirectory, string path)
+    {
+        RejectLinks(modeDirectory, path);
+        if (!File.Exists(path))
+        {
+            throw new ModeLoadException(
+                $"Required mode file '{DescribeRelative(modeDirectory, path)}' was not found.");
+        }
+
+        return path;
+    }
+
+    private static string DescribeRelative(string modeDirectory, string path) =>
+        Path.GetRelativePath(modeDirectory, path).Replace('\\', '/');
+
+    private static string[] ResolvePhasePrompts(
+        string modeDirectory,
+        ModeManifest manifest,
+        string? lens)
+    {
+        var paths = new string[manifest.Phases.Count];
+        var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < paths.Length; index++)
+        {
+            var phase = manifest.Phases[index];
+            paths[index] = ResolvePromptReference(modeDirectory, phase.Prompt, lens);
+            if (seen.TryGetValue(paths[index], out var first))
+            {
+                var other = manifest.Phases[first];
+                throw new ModeLoadException(
+                    $"Phases '{other.Name}' and '{phase.Name}' reference the same prompt file " +
+                    $"('{other.Prompt}' and '{phase.Prompt}'); prompt paths must be unique " +
+                    "(compared case-insensitively after normalization).");
+            }
+
+            seen[paths[index]] = index;
+        }
+
+        return paths;
+    }
+
+    private static void ValidateRequiredPromptCoverage(
+        string modeDirectory,
+        string[] promptPaths,
+        string? lens)
+    {
+        var referenced = new HashSet<string>(promptPaths, StringComparer.Ordinal);
+        foreach (var required in RequiredPromptReferences)
+        {
+            var effective = ResolvePromptReference(modeDirectory, required, lens);
+            if (!referenced.Contains(effective))
+            {
+                throw new ModeLoadException(
+                    $"Required prompt '{DescribeRelative(modeDirectory, effective)}' is not " +
+                    "referenced by any phase.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves a manifest prompt reference to its effective absolute path.
+    /// The reference is checked as written and again after the lens rewrite.
+    /// </summary>
+    private static string ResolvePromptReference(
+        string modeDirectory,
+        string reference,
+        string? lens)
+    {
+        RejectRooted(reference);
+        var normalized = reference.Replace('\\', '/');
+        var contained = ResolveChildPath(modeDirectory, normalized);
+
+        // Apply the lens to the canonical mode-relative path so equivalent
+        // spellings (./prompts/x.md, prompts/../prompts/x.md) behave identically.
+        var canonical = Path.GetRelativePath(Path.GetFullPath(modeDirectory), contained)
+            .Replace('\\', '/');
+        return ResolveChildPath(modeDirectory, ApplyLens(canonical, lens));
+    }
+
+    private static void RejectRooted(string reference)
+    {
+        // Rejected on every platform so a manifest means the same thing everywhere.
+        var rooted = reference.StartsWith('/') ||
+            reference.StartsWith('\\') ||
+            (reference.Length >= 2 && char.IsAsciiLetter(reference[0]) && reference[1] == ':') ||
+            Path.IsPathRooted(reference);
+        if (rooted)
+        {
+            throw new ModeLoadException(
+                $"Prompt path '{reference}' must be relative to the mode directory.");
+        }
+    }
+
+    /// <summary>
+    /// Rejects symbolic links, junctions, and other reparse points on the mode
+    /// directory and every component below it down to <paramref name="path"/>.
+    /// The configured modes root is the trusted base and is not checked.
+    /// </summary>
+    private static void RejectLinks(string modeDirectory, string path)
+    {
+        var current = modeDirectory;
+        ThrowIfLink(modeDirectory, modeDirectory, path);
+        foreach (var segment in Path.GetRelativePath(modeDirectory, path)
+                     .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            current = Path.Combine(current, segment);
+            ThrowIfLink(modeDirectory, current, path);
+        }
+    }
+
+    private static void ThrowIfLink(string modeDirectory, string component, string path)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(component);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or
+                ArgumentException or NotSupportedException)
+        {
+            return; // Missing or unreadable; the existence check reports it.
+        }
+
+        if (attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new ModeLoadException(
+                $"Prompt path '{DescribeRelative(modeDirectory, path)}' passes through a " +
+                $"symbolic link or junction at '{DescribeRelative(modeDirectory, component)}'; " +
+                "links are not allowed inside a mode directory.");
+        }
     }
 
     private static string ResolveChildPath(string root, string relativePath)
@@ -300,16 +449,15 @@ public sealed class FileModeLoader : IModeLoader
                 exception);
         }
 
-        // A filesystem root (e.g. "C:\") already ends with a separator.
-        var rootPrefix = Path.EndsInDirectorySeparator(fullRoot)
-            ? fullRoot
-            : fullRoot + Path.DirectorySeparatorChar;
+        // Exactly one trailing separator; a filesystem root already has one.
+        var trimmed = Path.TrimEndingDirectorySeparator(fullRoot);
+        var rootPrefix = Path.EndsInDirectorySeparator(trimmed)
+            ? trimmed
+            : trimmed + Path.DirectorySeparatorChar;
 
-        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (!candidate.StartsWith(rootPrefix, comparison))
+        // Ordinal on every OS: a case-only sibling is a different directory on
+        // case-sensitive volumes, and rejecting it elsewhere keeps modes portable.
+        if (!candidate.StartsWith(rootPrefix, StringComparison.Ordinal))
         {
             throw new ModeLoadException(
                 $"Path '{relativePath}' escapes the mode directory.");

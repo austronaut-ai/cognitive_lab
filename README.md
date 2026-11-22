@@ -76,6 +76,28 @@ Validation loads `mode.json`, `MODE.md`, and the default prompts through the
 same Core loader a run uses. It makes no model call, needs no credentials or
 input file, and writes no run output. `--modes-root` defaults to `./modes`.
 
+Manifest rules enforced by validation (and by every run):
+
+- A mode has exactly three phases, in this order: `main`, `critic`,
+  `revision`. Each phase must declare its `kind` explicitly; omitting or
+  repeating a kind is an error.
+- Phase names use only ASCII letters, digits, and hyphens (`A-Z`, `a-z`,
+  `0-9`, `-`), the same set as mode and lens names. Names must be unique
+  ignoring case.
+- Prompt paths are relative to the mode directory. `/` and `\` both work as
+  separators and `.`/`..` segments are resolved, but rooted paths (leading
+  slash or backslash, drive letters, UNC) are rejected on every platform. A
+  path must stay inside the mode directory; the containment check is
+  case-sensitive, so `../Frame/...` from mode `frame` is rejected even on a
+  case-insensitive filesystem. Symbolic links and junctions inside the mode
+  directory are rejected.
+- Each phase must use a distinct prompt file; two references that resolve to
+  the same file (ignoring case) are rejected.
+- The three required prompts (`prompts/main.md`, `prompts/critic.md`,
+  `prompts/revision.md`) must each be referenced by a phase, using that exact
+  spelling. With `--lens <name>` the required paths are the lens equivalents
+  (`prompts/<name>/main.md`, and so on).
+
 | Exit code | Meaning |
 | --- | --- |
 | `0` | The mode is valid. |

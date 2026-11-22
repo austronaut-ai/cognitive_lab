@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CognitiveRuntime.Core.Contracts;
 
 public enum PhaseKind
@@ -24,6 +26,7 @@ public sealed record ModePhaseManifest
 {
     public string Name { get; init; } = string.Empty;
 
+    [JsonRequired]
     public PhaseKind Kind { get; init; }
 
     public string Prompt { get; init; } = string.Empty;

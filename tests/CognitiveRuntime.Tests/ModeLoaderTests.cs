@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using CognitiveRuntime.Core.Contracts;
 using CognitiveRuntime.Core.Exceptions;
 using CognitiveRuntime.Core.Modes;
@@ -71,25 +72,6 @@ public sealed class ModeLoaderTests
     }
 
     [Fact]
-    public async Task LoadAsync_RejectsMissingRevisionPhase()
-    {
-        using var workspace = new TestWorkspace();
-        workspace.CreateMode(
-            phases:
-            [
-                CreatePhase("main", PhaseKind.Main),
-                CreatePhase("critic", PhaseKind.Critic)
-            ]);
-        var loader = new FileModeLoader(workspace.ModesRoot);
-
-        var exception = await Assert.ThrowsAsync<ModeLoadException>(
-            () => loader.LoadAsync("frame"));
-
-        Assert.Contains("exactly three phases", exception.Message);
-        Assert.Contains("main, critic, revision", exception.Message);
-    }
-
-    [Fact]
     public async Task LoadAsync_RejectsOutOfOrderRevisionPhase()
     {
         using var workspace = new TestWorkspace();
@@ -107,26 +89,6 @@ public sealed class ModeLoaderTests
 
         Assert.Contains("Phase 2", exception.Message);
         Assert.Contains("critic", exception.Message);
-        Assert.Contains("revision", exception.Message);
-    }
-
-    [Fact]
-    public async Task LoadAsync_RejectsDuplicateRequiredPhase()
-    {
-        using var workspace = new TestWorkspace();
-        workspace.CreateMode(
-            phases:
-            [
-                CreatePhase("main", PhaseKind.Main),
-                CreatePhase("critic", PhaseKind.Critic),
-                CreatePhase("critic-copy", PhaseKind.Critic)
-            ]);
-        var loader = new FileModeLoader(workspace.ModesRoot);
-
-        var exception = await Assert.ThrowsAsync<ModeLoadException>(
-            () => loader.LoadAsync("frame"));
-
-        Assert.Contains("Phase 3", exception.Message);
         Assert.Contains("revision", exception.Message);
     }
 
@@ -175,6 +137,387 @@ public sealed class ModeLoaderTests
             () => loader.LoadAsync("frame", "../escape"));
 
         Assert.Contains("unsupported characters", exception.Message);
+    }
+
+    private static ModePhaseManifest Phase(string name, PhaseKind kind, string prompt) =>
+        new() { Name = name, Kind = kind, Prompt = prompt };
+
+    private static ModePhaseManifest[] Canonical(
+        string main = "prompts/main.md",
+        string critic = "prompts/critic.md",
+        string revision = "prompts/revision.md") =>
+    [
+        Phase("main", PhaseKind.Main, main),
+        Phase("critic", PhaseKind.Critic, critic),
+        Phase("revision", PhaseKind.Revision, revision)
+    ];
+
+    private static async Task<ModeLoadException> LoadFailureAsync(
+        TestWorkspace workspace,
+        string? lens = null) =>
+        await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("frame", lens));
+
+    private static bool FilesystemIsCaseSensitive(string directory)
+    {
+        var probe = Path.Combine(directory, "case-probe");
+        Directory.CreateDirectory(probe);
+        return !Directory.Exists(Path.Combine(directory, "CASE-PROBE"));
+    }
+
+    private static bool TryCreateSymlink(string link, string target, bool directory)
+    {
+        try
+        {
+            if (directory)
+            {
+                Directory.CreateSymbolicLink(link, target);
+            }
+            else
+            {
+                File.CreateSymbolicLink(link, target);
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("ma in")]
+    [InlineData("main.v2")]
+    [InlineData("ma/in")]
+    [InlineData("ma\\in")]
+    [InlineData("ma_in")]
+    [InlineData("m\u00e4in")]
+    public async Task LoadAsync_RejectsInvalidPhaseNames(string? name)
+    {
+        using var workspace = new TestWorkspace();
+        var phases = Canonical();
+        phases[0] = phases[0] with { Name = name! };
+        workspace.CreateMode(phases: phases);
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("Phase 1 name", exception.Message);
+        Assert.Contains("ASCII letters, digits, or hyphens", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_AcceptsSafeCustomPhaseNames()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(
+            phases:
+            [
+                Phase("Draft-1", PhaseKind.Main, "prompts/main.md"),
+                Phase("review", PhaseKind.Critic, "prompts/critic.md"),
+                Phase("final2", PhaseKind.Revision, "prompts/revision.md")
+            ]);
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.Equal(["Draft-1", "review", "final2"], mode.Phases.Select(phase => phase.Name));
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsCaseInsensitiveDuplicatePhaseNames()
+    {
+        using var workspace = new TestWorkspace();
+        var phases = Canonical();
+        phases[1] = phases[1] with { Name = "MAIN" };
+        workspace.CreateMode(phases: phases);
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("duplicated", exception.Message);
+        Assert.Contains("case-insensitively", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task LoadAsync_RejectsOmittedRequiredPhase(int index)
+    {
+        using var workspace = new TestWorkspace();
+        var phases = Canonical().ToList();
+        phases.RemoveAt(index);
+        workspace.CreateMode(phases: phases);
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("exactly three phases", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(PhaseKind.Main, 1)]
+    [InlineData(PhaseKind.Critic, 2)]
+    [InlineData(PhaseKind.Revision, 1)]
+    public async Task LoadAsync_RejectsRepeatedRequiredPhaseKind(PhaseKind repeated, int index)
+    {
+        using var workspace = new TestWorkspace();
+        var phases = Canonical();
+        phases[index] = phases[index] with { Kind = repeated };
+        workspace.CreateMode(phases: phases);
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains($"Phase {index + 1} must be", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsOmittedPhaseKind()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        var path = Path.Combine(modeDirectory, "mode.json");
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        root["phases"]![0]!.AsObject().Remove("kind");
+        File.WriteAllText(path, root.ToJsonString());
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("kind", exception.Message);
+        Assert.Contains(path, exception.Message);
+    }
+
+    [Theory]
+    [InlineData("prompts/main.md", "prompts/main.md")]
+    [InlineData("prompts/main.md", "prompts/./main.md")]
+    [InlineData("prompts/main.md", "prompts\\main.md")]
+    [InlineData("prompts/main.md", "prompts/x/../main.md")]
+    [InlineData("prompts/main.md", "prompts/Main.md")]
+    [InlineData("prompts/main.md", "PROMPTS/main.md")]
+    public async Task LoadAsync_RejectsDuplicateResolvedPromptPaths(string first, string second)
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(phases: Canonical(main: first, critic: second));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("must be unique", exception.Message);
+        Assert.Contains("'main'", exception.Message);
+        Assert.Contains("'critic'", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_AcceptsNormalizedRequiredPromptReferences()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(
+            phases: Canonical(
+                main: "prompts\\main.md",
+                critic: "./prompts/critic.md",
+                revision: "prompts/sub/../revision.md"));
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.Equal(3, mode.Phases.Count);
+    }
+
+    [Fact]
+    public async Task LoadAsync_WithLens_AppliesLensToCanonicalPromptPaths()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode(
+            phases: Canonical(
+                main: "./prompts/main.md",
+                critic: "prompts/../prompts/critic.md",
+                revision: "prompts\\revision.md"));
+        var lensDirectory = Path.Combine(modeDirectory, "prompts", "warcraft");
+        Directory.CreateDirectory(lensDirectory);
+        File.WriteAllText(Path.Combine(lensDirectory, "main.md"), "Lens main prompt.");
+        File.WriteAllText(Path.Combine(lensDirectory, "critic.md"), "Lens critic prompt.");
+        File.WriteAllText(Path.Combine(lensDirectory, "revision.md"), "Lens revision prompt.");
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame", "warcraft");
+
+        Assert.Collection(
+            mode.Phases,
+            phase => Assert.Equal("Lens main prompt.", phase.Prompt),
+            phase => Assert.Equal("Lens critic prompt.", phase.Prompt),
+            phase => Assert.Equal("Lens revision prompt.", phase.Prompt));
+    }
+
+    [Theory]
+    [InlineData("/etc/passwd")]
+    [InlineData("\\\\server\\share\\main.md")]
+    [InlineData("\\prompts\\main.md")]
+    [InlineData("C:\\prompts\\main.md")]
+    [InlineData("C:/prompts/main.md")]
+    [InlineData("C:main.md")]
+    public async Task LoadAsync_RejectsRootedPromptPaths(string reference)
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(phases: Canonical(main: reference));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("must be relative", exception.Message);
+        Assert.Contains(reference, exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsNativeAbsolutePromptPath()
+    {
+        using var workspace = new TestWorkspace();
+        var absolute = Path.Combine(workspace.ModesRoot, "frame", "prompts", "main.md");
+        workspace.CreateMode(phases: Canonical(main: absolute));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("must be relative", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("../main.md")]
+    [InlineData("prompts/../../main.md")]
+    [InlineData("prompts\\..\\..\\frame2\\prompts\\main.md")]
+    [InlineData("../frame2/prompts/main.md")]
+    [InlineData("../Frame/prompts/main.md")]
+    [InlineData("prompts/..")]
+    public async Task LoadAsync_RejectsEscapingPromptPaths(string reference)
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(phases: Canonical(main: reference));
+        Directory.CreateDirectory(Path.Combine(workspace.ModesRoot, "frame2", "prompts"));
+        File.WriteAllText(Path.Combine(workspace.ModesRoot, "frame2", "prompts", "main.md"), "x");
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("escapes the mode directory", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsEscapingPromptPathUnderLens()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(phases: Canonical(main: "prompts/../../main.md"));
+        Directory.CreateDirectory(Path.Combine(workspace.ModesRoot, "frame", "prompts", "warcraft"));
+
+        var exception = await LoadFailureAsync(workspace, "warcraft");
+
+        Assert.Contains("escapes the mode directory", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("main")]
+    [InlineData("critic")]
+    [InlineData("revision")]
+    public async Task LoadAsync_RejectsUnreferencedRequiredPrompt(string unreferenced)
+    {
+        using var workspace = new TestWorkspace();
+        var phases = Canonical();
+        var index = unreferenced switch { "main" => 0, "critic" => 1, _ => 2 };
+        phases[index] = phases[index] with { Prompt = "prompts/extra.md" };
+        var modeDirectory = workspace.CreateMode(phases: phases);
+        File.WriteAllText(Path.Combine(modeDirectory, "prompts", "extra.md"), "Substitute.");
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains($"prompts/{unreferenced}.md", exception.Message);
+        Assert.Contains("not referenced by any phase", exception.Message);
+        Assert.True(File.Exists(Path.Combine(modeDirectory, "prompts", $"{unreferenced}.md")));
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsUnreferencedRequiredPromptUnderLens()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode(phases: Canonical(critic: "prompts/extra.md"));
+        var lensDirectory = Path.Combine(modeDirectory, "prompts", "warcraft");
+        Directory.CreateDirectory(lensDirectory);
+        foreach (var file in new[] { "main", "critic", "revision", "extra" })
+        {
+            File.WriteAllText(Path.Combine(lensDirectory, $"{file}.md"), "Lens prompt.");
+        }
+
+        var exception = await LoadFailureAsync(workspace, "warcraft");
+
+        Assert.Contains("prompts/warcraft/critic.md", exception.Message);
+        Assert.Contains("not referenced by any phase", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsCanonicalSpellingChange()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode(phases: Canonical(main: "prompts/Main.md"));
+        File.WriteAllText(Path.Combine(modeDirectory, "prompts", "Main.md"), "Cased.");
+
+        // On a case-insensitive volume Main.md and main.md are the same file, but
+        // the manifest must still use the canonical spelling.
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("not referenced by any phase", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsLinkedPromptFileOutsideMode()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        var outside = Path.Combine(workspace.Root, "outside.md");
+        File.WriteAllText(outside, "Outside prompt.");
+        var link = Path.Combine(modeDirectory, "prompts", "main.md");
+        File.Delete(link);
+        if (!TryCreateSymlink(link, outside, directory: false))
+        {
+            return;
+        }
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("symbolic link or junction", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsLinkedPromptDirectoryOutsideMode()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        var outside = Path.Combine(workspace.Root, "outside-prompts");
+        Directory.CreateDirectory(outside);
+        foreach (var file in new[] { "main", "critic", "revision" })
+        {
+            File.WriteAllText(Path.Combine(outside, $"{file}.md"), "Outside prompt.");
+        }
+
+        var prompts = Path.Combine(modeDirectory, "prompts");
+        Directory.Delete(prompts, recursive: true);
+        if (!TryCreateSymlink(prompts, outside, directory: true))
+        {
+            return;
+        }
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("symbolic link or junction", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsCaseOnlySiblingDirectoryOnCaseSensitiveFilesystem()
+    {
+        using var workspace = new TestWorkspace();
+        if (!FilesystemIsCaseSensitive(workspace.Root))
+        {
+            return;
+        }
+
+        workspace.CreateMode("frame", phases: Canonical(main: "../Frame/prompts/main.md"));
+        workspace.CreateMode("Frame");
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("escapes the mode directory", exception.Message);
     }
 
     private const string ValidManifestJson = """

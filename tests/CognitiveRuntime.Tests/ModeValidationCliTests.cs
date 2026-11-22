@@ -223,26 +223,97 @@ public sealed class ModeValidationCliTests
     [Fact]
     public async Task Validate_PromptInCaseDifferingSiblingDirectory_IsRejectedOnCaseSensitiveFilesystem()
     {
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        using var workspace = new TestWorkspace();
+        var probe = Path.Combine(workspace.Root, "case-probe");
+        Directory.CreateDirectory(probe);
+        if (Directory.Exists(Path.Combine(workspace.Root, "CASE-PROBE")))
         {
-            return;
+            return; // Case-insensitive volume: no distinct sibling can exist.
         }
 
-        using var workspace = new TestWorkspace();
         var dir = workspace.CreateMode("frame");
         workspace.CreateMode("Frame");
-        var path = Path.Combine(dir, "mode.json");
-        File.WriteAllText(
-            path,
-            File.ReadAllText(path).Replace(
-                "prompts/main.md",
-                "../Frame/prompts/main.md"));
+        ReplaceInManifest(dir, "prompts/main.md", "../Frame/prompts/main.md");
+        var before = Snapshot(workspace.Root);
 
-        var result = await RunAsync(
-            "modes", "validate", "frame", "--modes-root", workspace.ModesRoot);
+        var result = await RunValidateAsync(workspace);
 
+        AssertRejected(result, "escapes");
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    [Fact]
+    public async Task Validate_CaseOnlySiblingTraversal_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        ReplaceInManifest(dir, "prompts/main.md", "../Frame/prompts/main.md");
+
+        var result = await RunValidateAsync(workspace);
+
+        AssertRejected(result, "escapes");
+    }
+
+    [Fact]
+    public async Task Validate_InvalidPhaseName_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        ReplaceInManifest(dir, "\"name\": \"main\"", "\"name\": \"ma_in\"");
+        var before = Snapshot(workspace.Root);
+
+        var result = await RunValidateAsync(workspace);
+
+        AssertRejected(result, "Phase 1 name 'ma_in'");
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    [Fact]
+    public async Task Validate_DuplicateNormalizedPrompt_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        ReplaceInManifest(dir, "prompts/critic.md", "prompts/./main.md");
+        var before = Snapshot(workspace.Root);
+
+        var result = await RunValidateAsync(workspace);
+
+        AssertRejected(result, "must be unique");
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    [Fact]
+    public async Task Validate_UnreferencedRequiredPrompt_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        File.WriteAllText(Path.Combine(dir, "prompts", "extra.md"), "Substitute.");
+        ReplaceInManifest(dir, "prompts/revision.md", "prompts/extra.md");
+        var before = Snapshot(workspace.Root);
+
+        var result = await RunValidateAsync(workspace);
+
+        AssertRejected(result, "prompts/revision.md");
+        Assert.Contains("not referenced by any phase", result.Err);
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    private static void ReplaceInManifest(string modeDirectory, string target, string replacement)
+    {
+        var path = Path.Combine(modeDirectory, "mode.json");
+        var json = File.ReadAllText(path);
+        Assert.Contains(target, json);
+        File.WriteAllText(path, json.Replace(target, replacement, StringComparison.Ordinal));
+    }
+
+    private static Task<Result> RunValidateAsync(TestWorkspace workspace) =>
+        RunAsync("modes", "validate", "frame", "--modes-root", workspace.ModesRoot);
+
+    private static void AssertRejected(Result result, string diagnostic)
+    {
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains("escapes", result.Err);
+        Assert.Equal(string.Empty, result.Out);
+        Assert.Contains(diagnostic, result.Err);
     }
 
     [Fact]
