@@ -110,6 +110,35 @@ Manifest rules enforced by validation (and by every run):
 | `2` | Usage error (bad arguments or an invalid `--modes-root` path). |
 | `130` | Cancelled. |
 
+## List Modes
+
+See which modes exist and what they do, without a run:
+
+```powershell
+dotnet run --project src/CognitiveRuntime.Cli -- modes list
+dotnet run --project src/CognitiveRuntime.Cli -- modes list --modes-root path/to/modes
+```
+
+`modes list` loads every directory directly under the modes root through
+the same Core loader that `modes validate` uses (there is no second
+validator). Each valid mode is printed to stdout with its name, version,
+description, and phases (name and kind) in declared order. A mode whose
+prompts live only under lens variants, such as `lens`, is valid: it is
+listed with the lenses that load (`Lenses: warcraft`). A lens that fails to
+load is reported as invalid for that lens and left out of the list; a mode
+with no usable lens is not listed. Directories that are not valid modes are
+named on stderr with the loader's reason, and never stop the valid modes from
+being listed. Ordinary files in the root are ignored. It makes no model call,
+needs no credentials or input file, and writes no run output. `--modes-root`
+defaults to `./modes`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Every directory is a valid mode. An existing root with no mode directories also exits `0` and prints a no-modes message. |
+| `1` | Some directories or lenses are invalid or unreadable. The valid modes are still printed to stdout and each problem goes to stderr. Also used when the modes root is missing or unreadable. |
+| `2` | Usage error (bad arguments or an invalid `--modes-root` path). |
+| `130` | Cancelled. |
+
 ## Static HTML Inspection
 
 The runtime may emit static HTML inspection artifacts for completed runs. These

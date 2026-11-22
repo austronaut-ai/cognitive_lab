@@ -46,3 +46,20 @@ public sealed record LoadedMode(
     IReadOnlyList<LoadedPhase> Phases);
 
 public sealed record LoadedPhase(string Name, PhaseKind Kind, string Prompt);
+
+public sealed record ModeCatalogPhase(string Name, PhaseKind Kind);
+
+/// <summary>A mode that loaded. <c>Lenses</c> is empty unless the mode needs a lens.</summary>
+public sealed record ModeCatalogEntry(
+    string Name,
+    int Version,
+    string Description,
+    IReadOnlyList<ModeCatalogPhase> Phases,
+    IReadOnlyList<string> Lenses);
+
+/// <summary>A mode directory, or one lens of it, that did not load, and why.</summary>
+public sealed record ModeCatalogDiagnostic(string Directory, string? Lens, string Reason);
+
+public sealed record ModeCatalog(
+    IReadOnlyList<ModeCatalogEntry> Entries,
+    IReadOnlyList<ModeCatalogDiagnostic> Diagnostics);

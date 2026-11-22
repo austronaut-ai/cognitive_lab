@@ -51,7 +51,7 @@ internal sealed class CliApplication
     {
         if (ModeValidationArguments.IsModesCommand(args))
         {
-            return await ValidateModeAsync(
+            return await RunModesAsync(
                 args,
                 output,
                 error,
@@ -128,7 +128,7 @@ internal sealed class CliApplication
         }
     }
 
-    private static async Task<int> ValidateModeAsync(
+    private static async Task<int> RunModesAsync(
         string[] args,
         TextWriter output,
         TextWriter error,
@@ -141,30 +141,137 @@ internal sealed class CliApplication
         }
         catch (CliUsageException exception)
         {
-            return ReportValidationUsage(error, exception.Message);
+            return ReportModesUsage(error, exception.Message, UsageFor(args));
         }
 
         if (parsed.ShowHelp)
         {
-            WriteValidationHelp(output);
+            WriteModesHelp(output, parsed.Command);
             return ExitCodes.Success;
         }
 
-        var modeName = parsed.ModeName!;
-        string modesRoot;
+        if (!TryResolveModesRoot(parsed.ModesRoot, out var modesRoot, out var rootProblem))
+        {
+            return ReportModesUsage(error, rootProblem, UsageFor(args));
+        }
+
+        return parsed.Command == ModesCommand.List
+            ? await ListModesAsync(modesRoot, output, error, cancellationToken)
+            : await ValidateModeAsync(parsed, modesRoot, output, error, cancellationToken);
+    }
+
+    private static string[] UsageFor(string[] args)
+    {
+        if (args.Length > 1 &&
+            string.Equals(args[1], "list", StringComparison.OrdinalIgnoreCase))
+        {
+            return [ModeValidationArguments.ListUsage];
+        }
+
+        if (args.Length > 1 &&
+            string.Equals(args[1], "validate", StringComparison.OrdinalIgnoreCase))
+        {
+            return [ModeValidationArguments.Usage];
+        }
+
+        return [ModeValidationArguments.Usage, ModeValidationArguments.ListUsage];
+    }
+
+    private static bool TryResolveModesRoot(
+        string? requested,
+        out string modesRoot,
+        out string problem)
+    {
         try
         {
             modesRoot = Path.GetFullPath(
-                parsed.ModesRoot ??
-                Path.Combine(Environment.CurrentDirectory, "modes"));
+                requested ?? Path.Combine(Environment.CurrentDirectory, "modes"));
+            problem = string.Empty;
+            return true;
         }
         catch (Exception exception) when (
             exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return ReportValidationUsage(
-                error,
-                $"Invalid --modes-root '{parsed.ModesRoot}': {exception.Message}");
+            modesRoot = string.Empty;
+            problem = $"Invalid --modes-root '{requested}': {exception.Message}";
+            return false;
         }
+    }
+
+    private static async Task<int> ListModesAsync(
+        string modesRoot,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        ModeCatalog catalog;
+        try
+        {
+            catalog = await new FileModeLoader(modesRoot).ListAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            error.WriteLine("Listing of modes cancelled.");
+            return ExitCodes.Cancelled;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine(
+                $"Modes root '{modesRoot}' could not be read: {exception.Message}");
+            return ExitCodes.RuntimeFailed;
+        }
+
+        WriteCatalog(output, modesRoot, catalog);
+        foreach (var diagnostic in catalog.Diagnostics)
+        {
+            error.WriteLine(DescribeDiagnostic(diagnostic));
+        }
+
+        return catalog.Diagnostics.Count == 0
+            ? ExitCodes.Success
+            : ExitCodes.RuntimeFailed;
+    }
+
+    private static string DescribeDiagnostic(ModeCatalogDiagnostic diagnostic) =>
+        diagnostic.Lens is null
+            ? $"Mode '{diagnostic.Directory}' is invalid: {diagnostic.Reason}"
+            : $"Mode '{diagnostic.Directory}' with lens '{diagnostic.Lens}' is invalid: " +
+              diagnostic.Reason;
+
+    private static void WriteCatalog(TextWriter output, string modesRoot, ModeCatalog catalog)
+    {
+        if (catalog.Entries.Count == 0)
+        {
+            output.WriteLine($"No valid modes found under '{modesRoot}'.");
+            return;
+        }
+
+        foreach (var entry in catalog.Entries)
+        {
+            output.WriteLine($"Mode: {entry.Name}");
+            output.WriteLine($"  Version: {entry.Version}");
+            output.WriteLine($"  Description: {entry.Description}");
+            output.WriteLine(
+                "  Phases: " + string.Join(
+                    ", ",
+                    entry.Phases.Select(phase =>
+                        $"{phase.Name} ({phase.Kind.ToString().ToLowerInvariant()})")));
+            if (entry.Lenses.Count > 0)
+            {
+                output.WriteLine($"  Lenses: {string.Join(", ", entry.Lenses)}");
+            }
+        }
+    }
+
+    private static async Task<int> ValidateModeAsync(
+        ModeValidationArguments parsed,
+        string modesRoot,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        var modeName = parsed.ModeName!;
 
         try
         {
@@ -199,11 +306,58 @@ internal sealed class CliApplication
         return ExitCodes.Success;
     }
 
-    private static int ReportValidationUsage(TextWriter error, string message)
+    private static int ReportModesUsage(TextWriter error, string message, string[] usage)
     {
         error.WriteLine(message);
-        error.WriteLine(ModeValidationArguments.Usage);
+        foreach (var line in usage)
+        {
+            error.WriteLine(line);
+        }
+
         return ExitCodes.UsageError;
+    }
+
+    private static void WriteModesHelp(TextWriter writer, ModesCommand command)
+    {
+        if (command != ModesCommand.List)
+        {
+            WriteValidationHelp(writer);
+        }
+
+        if (command == ModesCommand.Group)
+        {
+            writer.WriteLine();
+        }
+
+        if (command != ModesCommand.Validate)
+        {
+            WriteListHelp(writer);
+        }
+    }
+
+    private static void WriteListHelp(TextWriter writer)
+    {
+        writer.WriteLine(ModeValidationArguments.ListUsage);
+        writer.WriteLine();
+        writer.WriteLine(
+            "Lists every valid mode under the modes root with its version, description, " +
+            "and phases in declared order. A mode whose prompts live under lens variants is " +
+            "listed with the lenses that load. Loading uses the same loader as validate. " +
+            "No model call is made and no run output is written.");
+        writer.WriteLine(
+            "Valid modes go to stdout. Invalid directories, with the reason, go to stderr " +
+            "and never hide the valid modes.");
+        writer.WriteLine();
+        writer.WriteLine("Options:");
+        writer.WriteLine("  --modes-root <path>   Defaults to ./modes.");
+        writer.WriteLine();
+        writer.WriteLine("Exit codes:");
+        writer.WriteLine("  0    Every directory is a valid mode (an empty root is fine).");
+        writer.WriteLine(
+            "  1    Some directories or lenses are invalid or unreadable (the valid modes are " +
+            "still listed), or the modes root could not be read.");
+        writer.WriteLine("  2    Usage error.");
+        writer.WriteLine("  130  Cancelled.");
     }
 
     private static void WriteValidationHelp(TextWriter writer)
@@ -418,6 +572,9 @@ internal sealed class CliApplication
         writer.WriteLine(
             "  dotnet run --project src/CognitiveRuntime.Cli -- " +
             "modes validate <mode> [--lens <name>] [--modes-root <path>]");
+        writer.WriteLine(
+            "  dotnet run --project src/CognitiveRuntime.Cli -- " +
+            "modes list [--modes-root <path>]");
         writer.WriteLine();
         writer.WriteLine("Options:");
         writer.WriteLine("  --mode <name>            Mode directory name.");

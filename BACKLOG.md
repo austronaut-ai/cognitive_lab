@@ -1269,6 +1269,8 @@ reading the filesystem.
 Outcome: The CLI lists valid mode names, versions, descriptions, and phase
 order, surfacing invalid mode directories without blocking the valid ones.
 
+Status: Complete.
+
 Acceptance:
 
 - The CLI lists valid mode names, versions, descriptions, and phase order.

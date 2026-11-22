@@ -25,14 +25,13 @@ public sealed class ModeValidationCliTests
     {
         new string[0],
         new[] { "validate" },
-        new[] { "list" },
         new[] { "validate", "a", "b" },
         new[] { "validate", "frame", "--input", "x.txt" },
         new[] { "validate", "frame", "--modes-root" },
         new[] { "validate", "frame", "--modes-root", "a", "--modes-root", "b" },
         new[] { "validate", "--modes-root", "a" },
         new[] { "validate", " " },
-        new[] { "list", "--help" },
+        new[] { "frobnicate" },
         new[] { "validate", "frame", "--help" },
         new[] { "validate", "frame", "--modes-root", "--help" },
         new[] { "validate", "frame", "--modes-root", "-h" },
@@ -48,6 +47,8 @@ public sealed class ModeValidationCliTests
         new[] { "modes", "validate", "--help" },
         new[] { "modes", "validate", "-h" },
         new[] { "modes", "--help" },
+        new[] { "modes", "list", "--help" },
+        new[] { "modes", "LIST", "-h" },
     };
 
     private static string[] Snapshot(string root) =>
@@ -354,6 +355,7 @@ public sealed class ModeValidationCliTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("modes validate", result.Out);
+        Assert.Contains("modes list", result.Out);
         Assert.Contains("--lens", result.Out);
     }
 
@@ -626,8 +628,9 @@ public sealed class ModeValidationCliTests
         var result = await RunAsync(args);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("modes validate <mode>", result.Out);
-        Assert.Contains("--lens", result.Out);
+        Assert.Contains(args.Contains("list", StringComparer.OrdinalIgnoreCase)
+            ? "modes list [--modes-root"
+            : "modes validate <mode>", result.Out);
         Assert.Contains("130", result.Out);
         Assert.Equal(string.Empty, result.Err);
     }

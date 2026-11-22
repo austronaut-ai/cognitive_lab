@@ -102,6 +102,102 @@ public sealed class FileModeLoader : IModeLoader
     }
 
     /// <summary>
+    /// Loads every immediate child directory of the modes root through
+    /// <see cref="LoadAsync"/> and reports what loaded and what did not. A mode that needs a
+    /// lens is listed with each lens that loads; lenses that fail are reported separately.
+    /// Per-directory failures never stop the listing; an unreadable root and
+    /// cancellation propagate.
+    /// </summary>
+    public async Task<ModeCatalog> ListAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var names = Directory.EnumerateDirectories(_modesRoot)
+            .Select(directory => Path.GetFileName(directory))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        var entries = new List<ModeCatalogEntry>();
+        var diagnostics = new List<ModeCatalogDiagnostic>();
+        foreach (var name in names)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await CatalogDirectoryAsync(name, entries, diagnostics, cancellationToken);
+        }
+
+        return new ModeCatalog(entries, diagnostics);
+    }
+
+    private async Task CatalogDirectoryAsync(
+        string name,
+        List<ModeCatalogEntry> entries,
+        List<ModeCatalogDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
+    {
+        // Directory names come from the filesystem, so apply the loader's name rule here rather than letting
+        // LoadAsync's argument guard (for example, a whitespace-only name) abort the whole listing.
+        if (!IsSafeName(name))
+        {
+            diagnostics.Add(new ModeCatalogDiagnostic(name, null, UnsafeModeNameMessage(name)));
+            return;
+        }
+
+        try
+        {
+            var mode = await LoadAsync(name, null, cancellationToken);
+            entries.Add(ToEntry(mode, []));
+        }
+        catch (ModeLoadException exception) when (exception.RequiredLenses is { } lenses)
+        {
+            await CatalogLensesAsync(name, lenses, entries, diagnostics, cancellationToken);
+        }
+        catch (Exception exception) when (IsLoadFailure(exception))
+        {
+            diagnostics.Add(new ModeCatalogDiagnostic(name, null, exception.Message));
+        }
+    }
+
+    private async Task CatalogLensesAsync(
+        string name,
+        IReadOnlyList<string> lenses,
+        List<ModeCatalogEntry> entries,
+        List<ModeCatalogDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
+    {
+        LoadedMode? first = null;
+        var usable = new List<string>();
+        foreach (var lens in lenses)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var mode = await LoadAsync(name, lens, cancellationToken);
+                first ??= mode;
+                usable.Add(lens);
+            }
+            catch (Exception exception) when (IsLoadFailure(exception))
+            {
+                diagnostics.Add(new ModeCatalogDiagnostic(name, lens, exception.Message));
+            }
+        }
+
+        if (first is not null)
+        {
+            entries.Add(ToEntry(first, usable));
+        }
+    }
+
+    private static bool IsLoadFailure(Exception exception) =>
+        exception is ModeLoadException or IOException or UnauthorizedAccessException;
+
+    private static ModeCatalogEntry ToEntry(LoadedMode mode, IReadOnlyList<string> lenses) =>
+        new(
+            mode.Manifest.Name,
+            mode.Manifest.Version,
+            mode.Manifest.Description,
+            mode.Phases.Select(phase => new ModeCatalogPhase(phase.Name, phase.Kind)).ToList(),
+            lenses);
+
+    /// <summary>
     /// A mode whose prompts live only under lens variants cannot load without a
     /// lens. Say so and list the choices instead of reporting a bare missing file.
     /// A partial default prompt set keeps the ordinary missing-file diagnostic.
@@ -132,7 +228,8 @@ public sealed class FileModeLoader : IModeLoader
 
         throw new ModeLoadException(
             $"Mode '{modeName}' requires a lens; its prompts are only available under " +
-            $"lens variants. Pass --lens <name>. Available lenses: {string.Join(", ", lenses)}.");
+            $"lens variants. Pass --lens <name>. Available lenses: {string.Join(", ", lenses)}.",
+            lenses);
     }
 
     private static List<string> ListAvailableLenses(string modeDirectory)
@@ -180,10 +277,12 @@ public sealed class FileModeLoader : IModeLoader
 
         if (!IsSafeName(modeName))
         {
-            throw new ModeLoadException(
-                $"Mode name '{modeName}' contains unsupported characters: {NameRule}");
+            throw new ModeLoadException(UnsafeModeNameMessage(modeName));
         }
     }
+
+    private static string UnsafeModeNameMessage(string modeName) =>
+        $"Mode name '{modeName}' contains unsupported characters: {NameRule}";
 
     private static void ValidateLensName(string lens)
     {
