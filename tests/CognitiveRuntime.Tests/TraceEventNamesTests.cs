@@ -21,6 +21,7 @@ public sealed class TraceEventNamesTests
             "artifact.reserved",
             "artifact.written",
             "budget.exceeded",
+            "context.projected",
             "critic.completed",
             "critic.started",
             "eval.completed",

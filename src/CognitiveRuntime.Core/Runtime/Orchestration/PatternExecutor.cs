@@ -10,6 +10,7 @@ public sealed class PatternExecutor
     private readonly PhaseRunner _phaseRunner;
     private readonly IArtifactWriter _artifactWriter;
     private readonly TimeProvider _timeProvider;
+    private readonly ContextProjector _contextProjector;
     private readonly int _maxBranchConcurrency;
 
     public PatternExecutor(
@@ -23,6 +24,7 @@ public sealed class PatternExecutor
         _phaseRunner = phaseRunner;
         _artifactWriter = artifactWriter;
         _timeProvider = timeProvider;
+        _contextProjector = new ContextProjector(timeProvider);
         _maxBranchConcurrency = maxBranchConcurrency > 0
             ? maxBranchConcurrency
             : Environment.ProcessorCount;
@@ -324,9 +326,22 @@ public sealed class PatternExecutor
                 initialInput,
                 node.InputNodeId,
                 completedResults);
-            var context = node.ContextNodeIds
-                .Select(contextNodeId => completedResults[contextNodeId].PhaseResult)
-                .ToArray();
+
+            // The runtime computes a default-deny projection from the node's
+            // declared context before the provider sees anything: the projected
+            // phase results are the only prior-result context handed to the
+            // model. Undeclared values cannot enter the projection, so they
+            // cannot reach the provider. The trace records the disclosure
+            // (source IDs, item count) without copying raw content.
+            var projected = _contextProjector.Project(
+                runId,
+                node,
+                input,
+                completedResults);
+            await trace.EmitAsync(
+                TraceEventNames.ContextProjected,
+                CreateProjectionTraceData(projected.Projection),
+                cancellationToken);
 
             var phaseResult = await _phaseRunner.RunAsync(
                 runId,
@@ -334,7 +349,7 @@ public sealed class PatternExecutor
                 mode,
                 phase,
                 input,
-                context,
+                projected.PhaseResults,
                 modelClient,
                 trace,
                 attempt: 1,
@@ -649,6 +664,28 @@ public sealed class PatternExecutor
             [TracePayloadKeys.Dependencies] = node.DependencyNodeIds,
             [TracePayloadKeys.ContextNodeIds] = node.ContextNodeIds,
             [TracePayloadKeys.InputNodeId] = node.InputNodeId
+        };
+
+    // Bounded projection payload: enough to prove which sources were disclosed
+    // to the node, never the raw projected content (that would duplicate
+    // sensitive or large values into the trace, against ADR-001). Source IDs
+    // here are the prior-result (claim) context; the input source is recorded
+    // separately, and item count covers input plus context.
+    private static Dictionary<string, object?> CreateProjectionTraceData(
+        ContextProjection projection) =>
+        new()
+        {
+            [TracePayloadKeys.ProjectionId] = projection.Id.Value,
+            [TracePayloadKeys.NodeId] = projection.NodeId,
+            [TracePayloadKeys.InputSource] = projection.Items
+                .Where(item => item.Source.Kind == AgentInformationKind.Observation)
+                .Select(item => item.Source.Id)
+                .FirstOrDefault(),
+            [TracePayloadKeys.SourceIds] = projection.Items
+                .Where(item => item.Source.Kind == AgentInformationKind.Claim)
+                .Select(item => item.Source.Id)
+                .ToArray(),
+            [TracePayloadKeys.ItemCount] = projection.Items.Length
         };
 
     private static void AddDuration(

@@ -36,6 +36,12 @@ public static class TracePayloadKeys
     public const string InputNodeId = "inputNodeId";
     public const string OutputLength = "outputLength";
 
+    // Context projection (the default-deny disclosure made to one node).
+    public const string ProjectionId = "projectionId";
+    public const string InputSource = "inputSource";
+    public const string SourceIds = "sourceIds";
+    public const string ItemCount = "itemCount";
+
     // Model calls.
     public const string CallId = "callId";
     public const string Attempt = "attempt";
