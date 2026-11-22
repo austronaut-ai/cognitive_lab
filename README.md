@@ -63,6 +63,26 @@ files expose each phase's raw output for inspection and are listed in
 `run.json` and traced as artifact writes. For `linear-pipeline`, each stage
 writes its own `stages/NN-<mode>/phases/NN-<phase>.md`.
 
+## Validate A Mode
+
+Check a mode without a run:
+
+```powershell
+dotnet run --project src/CognitiveRuntime.Cli -- modes validate frame
+dotnet run --project src/CognitiveRuntime.Cli -- modes validate frame --modes-root path/to/modes
+```
+
+Validation loads `mode.json`, `MODE.md`, and the default prompts through the
+same Core loader a run uses. It makes no model call, needs no credentials or
+input file, and writes no run output. `--modes-root` defaults to `./modes`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The mode is valid. |
+| `1` | The mode is invalid or could not be read; stderr names the mode and the reason. |
+| `2` | Usage error (bad arguments or an invalid `--modes-root` path). |
+| `130` | Cancelled. |
+
 ## Static HTML Inspection
 
 The runtime may emit static HTML inspection artifacts for completed runs. These

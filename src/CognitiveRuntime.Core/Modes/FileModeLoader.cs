@@ -65,7 +65,7 @@ public sealed class FileModeLoader : IModeLoader
         catch (JsonException exception)
         {
             throw new ModeLoadException(
-                $"Mode manifest '{manifestPath}' could not be parsed: {exception.Message}",
+                $"Mode manifest '{manifestPath}' could not be read: {DescribeJsonError(exception)}",
                 exception);
         }
 
@@ -90,6 +90,27 @@ public sealed class FileModeLoader : IModeLoader
             cancellationToken);
 
         return new LoadedMode(modeDirectory, documentation, manifest, phases);
+    }
+
+    private static string DescribeJsonError(JsonException exception)
+    {
+        var location = new List<string>();
+        if (!string.IsNullOrEmpty(exception.Path))
+        {
+            location.Add($"field '{exception.Path}'");
+        }
+
+        if (exception.LineNumber is { } line)
+        {
+            var position = exception.BytePositionInLine is { } column
+                ? $"line {line + 1}, byte {column + 1}"
+                : $"line {line + 1}";
+            location.Add(position);
+        }
+
+        var where = location.Count == 0 ? string.Empty : $" ({string.Join(", ", location)})";
+        // The first sentence only (the rest repeats the path and position); split on ". " so ".NET" stays whole.
+        return exception.Message.Split(". ")[0].TrimEnd('.') + "." + where;
     }
 
     private static void ValidateModeName(string modeName)
@@ -139,8 +160,41 @@ public sealed class FileModeLoader : IModeLoader
         return promptsPrefix + lens + "/" + relativePath[promptsPrefix.Length..];
     }
 
+    private static void RequireManifestFields(ModeManifest manifest)
+    {
+        if (manifest.Phases is null)
+        {
+            throw new ModeLoadException(
+                "Mode manifest field 'phases' must be an array of three phases, not null.");
+        }
+
+        for (var index = 0; index < manifest.Phases.Count; index++)
+        {
+            if (manifest.Phases[index] is null)
+            {
+                throw new ModeLoadException(
+                    $"Mode manifest phase {index + 1} in 'phases' must be an object, not null.");
+            }
+        }
+
+        if (manifest.OutputContract is null)
+        {
+            throw new ModeLoadException(
+                "Mode manifest field 'outputContract' must be an object, not null.");
+        }
+
+        if (manifest.OutputContract.RequiredHeadings is null)
+        {
+            throw new ModeLoadException(
+                "Mode manifest field 'outputContract.requiredHeadings' must be " +
+                "an array of headings, not null.");
+        }
+    }
+
     private static void ValidateManifest(string requestedName, ModeManifest manifest)
     {
+        RequireManifestFields(manifest);
+
         if (!string.Equals(requestedName, manifest.Name, StringComparison.OrdinalIgnoreCase))
         {
             throw new ModeLoadException(
@@ -231,11 +285,31 @@ public sealed class FileModeLoader : IModeLoader
 
     private static string ResolveChildPath(string root, string relativePath)
     {
-        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        var candidate = Path.GetFullPath(Path.Combine(fullRoot, relativePath));
-        var rootPrefix = fullRoot + Path.DirectorySeparatorChar;
+        string fullRoot;
+        string candidate;
+        try
+        {
+            fullRoot = Path.GetFullPath(root);
+            candidate = Path.GetFullPath(Path.Combine(fullRoot, relativePath));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ModeLoadException(
+                $"Path '{relativePath}' is not a valid file path: {exception.Message}",
+                exception);
+        }
 
-        if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        // A filesystem root (e.g. "C:\") already ends with a separator.
+        var rootPrefix = Path.EndsInDirectorySeparator(fullRoot)
+            ? fullRoot
+            : fullRoot + Path.DirectorySeparatorChar;
+
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!candidate.StartsWith(rootPrefix, comparison))
         {
             throw new ModeLoadException(
                 $"Path '{relativePath}' escapes the mode directory.");

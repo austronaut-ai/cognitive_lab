@@ -33,10 +33,31 @@ internal sealed class CliApplication
         _logger = logger;
     }
 
+    public static Task<int> RunAsync(
+        string[] args,
+        CancellationToken cancellationToken) =>
+        RunAsync(args, Console.Out, Console.Error, cancellationToken);
+
+    /// <summary>
+    /// Writer-based entry point. <paramref name="output"/> and
+    /// <paramref name="error"/> apply to the <c>modes validate</c> command;
+    /// run and experiment commands keep writing to the console.
+    /// </summary>
     public static async Task<int> RunAsync(
         string[] args,
+        TextWriter output,
+        TextWriter error,
         CancellationToken cancellationToken)
     {
+        if (ModeValidationArguments.IsModesCommand(args))
+        {
+            return await ValidateModeAsync(
+                args,
+                output,
+                error,
+                cancellationToken);
+        }
+
         var configuration = new ConfigurationBuilder()
             .AddEnvironmentVariables()
             .Build();
@@ -48,15 +69,15 @@ internal sealed class CliApplication
         }
         catch (CliUsageException exception)
         {
-            Console.Error.WriteLine(exception.Message);
-            Console.Error.WriteLine();
-            WriteHelp(Console.Error);
+            error.WriteLine(exception.Message);
+            error.WriteLine();
+            WriteHelp(error);
             return ExitCodes.UsageError;
         }
 
         if (options.ShowHelp)
         {
-            WriteHelp(Console.Out);
+            WriteHelp(output);
             return ExitCodes.Success;
         }
 
@@ -105,6 +126,100 @@ internal sealed class CliApplication
             Console.Error.WriteLine($"Fatal error: {exception.Message}");
             return ExitCodes.FromOutcome(RunOutcome.RuntimeFailed);
         }
+    }
+
+    private static async Task<int> ValidateModeAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        ModeValidationArguments parsed;
+        try
+        {
+            parsed = ModeValidationArguments.Parse(args);
+        }
+        catch (CliUsageException exception)
+        {
+            return ReportValidationUsage(error, exception.Message);
+        }
+
+        if (parsed.ShowHelp)
+        {
+            WriteValidationHelp(output);
+            return ExitCodes.Success;
+        }
+
+        var modeName = parsed.ModeName!;
+        string modesRoot;
+        try
+        {
+            modesRoot = Path.GetFullPath(
+                parsed.ModesRoot ??
+                Path.Combine(Environment.CurrentDirectory, "modes"));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return ReportValidationUsage(
+                error,
+                $"Invalid --modes-root '{parsed.ModesRoot}': {exception.Message}");
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await new FileModeLoader(modesRoot).LoadAsync(
+                modeName,
+                lens: null,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            error.WriteLine($"Validation of mode '{modeName}' cancelled.");
+            return ExitCodes.Cancelled;
+        }
+        catch (ModeLoadException exception)
+        {
+            error.WriteLine($"Mode '{modeName}' is invalid: {exception.Message}");
+            return ExitCodes.RuntimeFailed;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine(
+                $"Mode '{modeName}' could not be read under '{modesRoot}': " +
+                exception.Message);
+            return ExitCodes.RuntimeFailed;
+        }
+
+        output.WriteLine($"Mode '{modeName}' is valid.");
+        return ExitCodes.Success;
+    }
+
+    private static int ReportValidationUsage(TextWriter error, string message)
+    {
+        error.WriteLine(message);
+        error.WriteLine(ModeValidationArguments.Usage);
+        return ExitCodes.UsageError;
+    }
+
+    private static void WriteValidationHelp(TextWriter writer)
+    {
+        writer.WriteLine(ModeValidationArguments.Usage);
+        writer.WriteLine();
+        writer.WriteLine(
+            "Loads the mode manifest and default prompts through the runtime " +
+            "loader. No model call is made and no run output is written.");
+        writer.WriteLine();
+        writer.WriteLine("Options:");
+        writer.WriteLine("  --modes-root <path>   Defaults to ./modes.");
+        writer.WriteLine();
+        writer.WriteLine("Exit codes:");
+        writer.WriteLine("  0    Mode is valid.");
+        writer.WriteLine("  1    Mode is invalid or could not be read.");
+        writer.WriteLine("  2    Usage error.");
+        writer.WriteLine("  130  Cancelled.");
     }
 
     private async Task<int> ExecuteAsync(
@@ -296,9 +411,12 @@ internal sealed class CliApplication
         writer.WriteLine(
             "  dotnet run --project src/CognitiveRuntime.Cli -- " +
             "--mode <name> --input <path> [options]");
+        writer.WriteLine(
+            "  dotnet run --project src/CognitiveRuntime.Cli -- " +
+            "modes validate <mode> [--modes-root <path>]");
         writer.WriteLine();
         writer.WriteLine("Options:");
-        writer.WriteLine("  --mode <name>             Mode directory name.");
+        writer.WriteLine("  --mode <name>            Mode directory name.");
         writer.WriteLine("  --input <path>            Input text file.");
         writer.WriteLine(
             "  --run-mode <provider>     mock, github-models, openrouter, " +

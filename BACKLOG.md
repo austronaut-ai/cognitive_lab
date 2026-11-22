@@ -1243,6 +1243,8 @@ so authors discover mistakes only by running the loop.
 Outcome: A CLI command validates a mode with no model call and no run output,
 with documented success and failure exit codes.
 
+Status: Complete.
+
 Suggested command:
 
 ```text
