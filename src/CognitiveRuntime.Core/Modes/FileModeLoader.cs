@@ -77,6 +77,7 @@ public sealed class FileModeLoader : IModeLoader
 
         var promptPaths = ResolvePhasePrompts(modeDirectory, manifest, lens);
         ValidateRequiredPromptCoverage(modeDirectory, promptPaths, lens);
+        RequireLensWhenOnlyVariantsExist(modeName, modeDirectory, lens);
 
         var phases = new List<LoadedPhase>(manifest.Phases.Count);
         for (var index = 0; index < manifest.Phases.Count; index++)
@@ -98,6 +99,58 @@ public sealed class FileModeLoader : IModeLoader
             cancellationToken);
 
         return new LoadedMode(modeDirectory, documentation, manifest, phases);
+    }
+
+    /// <summary>
+    /// A mode whose prompts live only under lens variants cannot load without a
+    /// lens. Say so and list the choices instead of reporting a bare missing file.
+    /// A partial default prompt set keeps the ordinary missing-file diagnostic.
+    /// </summary>
+    private static void RequireLensWhenOnlyVariantsExist(
+        string modeName,
+        string modeDirectory,
+        string? lens)
+    {
+        if (lens is not null)
+        {
+            return;
+        }
+
+        var defaults = RequiredPromptReferences
+            .Select(reference => ResolveChildPath(modeDirectory, reference))
+            .ToArray();
+        if (defaults.Any(File.Exists))
+        {
+            return;
+        }
+
+        var lenses = ListAvailableLenses(modeDirectory);
+        if (lenses.Count == 0)
+        {
+            return;
+        }
+
+        throw new ModeLoadException(
+            $"Mode '{modeName}' requires a lens; its prompts are only available under " +
+            $"lens variants. Pass --lens <name>. Available lenses: {string.Join(", ", lenses)}.");
+    }
+
+    private static List<string> ListAvailableLenses(string modeDirectory)
+    {
+        var promptsDirectory = Path.Combine(modeDirectory, "prompts");
+        if (!Directory.Exists(promptsDirectory))
+        {
+            return [];
+        }
+
+        RejectLinks(modeDirectory, promptsDirectory);
+        return Directory.EnumerateDirectories(promptsDirectory)
+            .Where(directory => !new DirectoryInfo(directory).Attributes
+                .HasFlag(FileAttributes.ReparsePoint))
+            .Select(directory => Path.GetFileName(directory))
+            .Where(IsSafeName)
+            .Order(StringComparer.Ordinal)
+            .ToList();
     }
 
     private static string DescribeJsonError(JsonException exception)
@@ -125,22 +178,19 @@ public sealed class FileModeLoader : IModeLoader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modeName);
 
-        if (modeName.Any(character =>
-                !(char.IsAsciiLetterOrDigit(character) || character == '-')))
+        if (!IsSafeName(modeName))
         {
             throw new ModeLoadException(
-                $"Mode name '{modeName}' contains unsupported characters.");
+                $"Mode name '{modeName}' contains unsupported characters: {NameRule}");
         }
     }
 
     private static void ValidateLensName(string lens)
     {
-        if (string.IsNullOrWhiteSpace(lens) ||
-            lens.Any(character =>
-                !(char.IsAsciiLetterOrDigit(character) || character == '-')))
+        if (!IsSafeName(lens))
         {
             throw new ModeLoadException(
-                $"Lens name '{lens}' contains unsupported characters.");
+                $"Lens name '{lens}' contains unsupported characters: {NameRule}");
         }
     }
 
@@ -233,8 +283,7 @@ public sealed class FileModeLoader : IModeLoader
             if (!IsSafeName(manifest.Phases[index].Name))
             {
                 throw new ModeLoadException(
-                    $"Phase {index + 1} name '{manifest.Phases[index].Name}' is invalid: " +
-                    "use one or more ASCII letters, digits, or hyphens.");
+                    $"Phase {index + 1} name '{manifest.Phases[index].Name}' is invalid: {NameRule}");
             }
         }
 
@@ -283,8 +332,17 @@ public sealed class FileModeLoader : IModeLoader
     private static string FormatKind(PhaseKind kind) =>
         kind.ToString().ToLowerInvariant();
 
+    private const string NameRule =
+        "use only ASCII letters, digits, or hyphens, starting with a letter or digit.";
+
+    /// <summary>
+    /// The one rule for mode, lens, and phase names. A leading letter or digit keeps a name from looking like a
+    /// command-line option, so every listed lens can be passed as <c>--lens &lt;name&gt;</c> and none reads as a
+    /// flag such as <c>-h</c>.
+    /// </summary>
     private static bool IsSafeName(string? name) =>
         !string.IsNullOrEmpty(name) &&
+        char.IsAsciiLetterOrDigit(name[0]) &&
         name.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 
     private static string RequireFile(string root, string relativePath)

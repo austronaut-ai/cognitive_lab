@@ -37,6 +37,10 @@ public sealed class ModeValidationCliTests
         new[] { "validate", "frame", "--modes-root", "--help" },
         new[] { "validate", "frame", "--modes-root", "-h" },
         new[] { "validate", "frame", "--modes-root", "-x" },
+        new[] { "validate", "lens", "--lens" },
+        new[] { "validate", "lens", "--lens", " " },
+        new[] { "validate", "lens", "--lens", "--modes-root" },
+        new[] { "validate", "lens", "--lens", "a", "--LENS", "b" },
     };
 
     public static TheoryData<string[]> HelpArguments => new()
@@ -66,6 +70,192 @@ public sealed class ModeValidationCliTests
         Assert.Equal(string.Empty, result.Err);
         Assert.Equal(before, Snapshot(workspace.Root));
         Assert.Empty(Directory.GetFileSystemEntries(workspace.OutputRoot));
+    }
+
+    public static TheoryData<string, string?> CheckedInCases => CheckedInModeCases.Data();
+
+    [Theory]
+    [MemberData(nameof(CheckedInCases))]
+    public async Task Validate_CheckedInModeAndPromptVariant_ReturnsZero(string mode, string? lens)
+    {
+        string[] args = lens is null
+            ? ["modes", "validate", mode, "--modes-root", CheckedInModeCases.ModesRoot]
+            : ["modes", "validate", mode, "--LENS", lens, "--modes-root", CheckedInModeCases.ModesRoot];
+
+        var result = await RunAsync(args);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains($"'{mode}'", result.Out);
+        if (lens is not null)
+        {
+            Assert.Contains($"'{lens}'", result.Out);
+        }
+
+        Assert.Equal(string.Empty, result.Err);
+    }
+
+    [Fact]
+    public async Task Validate_RequiredLensMissing_ReturnsOneAndListsAvailableLenses()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        ModeLoaderTests.MoveDefaultPromptsToVariants(dir, "zeta", "alpha");
+        var before = Snapshot(workspace.Root);
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Out);
+        Assert.Contains("--lens", result.Err);
+        Assert.Contains("alpha, zeta", result.Err);
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    [Fact]
+    public async Task Validate_VariantOnlyMode_WithLens_ReturnsZero()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        ModeLoaderTests.MoveDefaultPromptsToVariants(dir, "alpha");
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--lens", "alpha", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("'alpha'", result.Out);
+    }
+
+    // A lens name starts with a letter or digit, so a dash-led directory is never offered as a lens and a dash-led
+    // value is never taken as one: no listed lens can read as an option or a help flag (-h) on the command line.
+    [Fact]
+    public async Task Validate_DashLedVariantDirectories_AreNotLenses()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        ModeLoaderTests.MoveDefaultPromptsToVariants(dir, "-alpha", "--alpha", "-h", "zeta");
+
+        var listed = await RunAsync(
+            "modes", "validate", "lens", "--modes-root", workspace.ModesRoot);
+        Assert.Equal(1, listed.ExitCode);
+        Assert.Contains("Available lenses: zeta.", listed.Err);
+
+        foreach (var value in new[] { "-alpha", "--alpha", "-h", "-H" })
+        {
+            var selected = await RunAsync(
+                "modes", "validate", "lens", "--lens", value, "--modes-root", workspace.ModesRoot);
+            Assert.Equal(2, selected.ExitCode);
+            Assert.Contains("requires a lens name", selected.Err);
+        }
+
+        var zeta = await RunAsync(
+            "modes", "validate", "lens", "--lens", "zeta", "--modes-root", workspace.ModesRoot);
+        Assert.Equal(0, zeta.ExitCode);
+    }
+
+    [Fact]
+    public async Task Validate_PartialDefaultPrompts_ReportsMissingFile()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        Directory.CreateDirectory(Path.Combine(dir, "prompts", "alpha"));
+        File.Delete(Path.Combine(dir, "prompts", "revision.md"));
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("prompts/revision.md", result.Err);
+        Assert.DoesNotContain("Available lenses", result.Err);
+    }
+
+    [Fact]
+    public async Task Validate_DefaultPromptsWithVariants_SucceedsWithoutLens()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        Directory.CreateDirectory(Path.Combine(dir, "prompts", "alpha"));
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Validate_UnknownLens_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode("lens");
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--lens", "nope", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Lens 'nope' was not found", result.Err);
+    }
+
+    [Fact]
+    public async Task Validate_UnsafeLens_ReturnsOne()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode("lens");
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--lens", "a.b", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("unsupported characters", result.Err);
+    }
+
+    [Fact]
+    public async Task Validate_IncompleteSelectedLens_ReportsMissingPrompt()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        ModeLoaderTests.MoveDefaultPromptsToVariants(dir, "alpha");
+        File.Delete(Path.Combine(dir, "prompts", "alpha", "critic.md"));
+
+        var result = await RunAsync(
+            "modes", "validate", "lens", "--lens", "alpha", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("prompts/alpha/critic.md", result.Err);
+    }
+
+    [Fact]
+    public async Task Validate_LensVariant_SucceedsInChildProcessWithBogusProvider()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        ModeLoaderTests.MoveDefaultPromptsToVariants(dir, "alpha");
+        Directory.Delete(workspace.OutputRoot);
+        var before = Snapshot(workspace.Root);
+
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = workspace.Root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(
+            Path.Combine(AppContext.BaseDirectory, "CognitiveRuntime.Cli.dll"));
+        foreach (var argument in new[] { "modes", "validate", "lens", "--lens", "alpha" })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment["MODEL_PROVIDER"] = "bogus-provider";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.True(process.ExitCode == 0, await stderr);
+        Assert.Contains("'alpha'", await stdout);
+        Assert.Equal(before, Snapshot(workspace.Root));
+        Assert.False(Directory.Exists(Path.Combine(workspace.Root, "outputs")));
     }
 
     [Fact]
@@ -164,6 +354,7 @@ public sealed class ModeValidationCliTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("modes validate", result.Out);
+        Assert.Contains("--lens", result.Out);
     }
 
     [Fact]
@@ -436,6 +627,7 @@ public sealed class ModeValidationCliTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("modes validate <mode>", result.Out);
+        Assert.Contains("--lens", result.Out);
         Assert.Contains("130", result.Out);
         Assert.Equal(string.Empty, result.Err);
     }

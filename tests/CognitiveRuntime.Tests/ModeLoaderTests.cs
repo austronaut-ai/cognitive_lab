@@ -193,6 +193,7 @@ public sealed class ModeLoaderTests
     [InlineData(" ")]
     [InlineData("ma in")]
     [InlineData("main.v2")]
+    [InlineData("-main")]
     [InlineData("ma/in")]
     [InlineData("ma\\in")]
     [InlineData("ma_in")]
@@ -613,34 +614,157 @@ public sealed class ModeLoaderTests
         Assert.Equal(["## Problem"], mode.Manifest.OutputContract.RequiredHeadings);
     }
 
-    [Theory]
-    [InlineData("challenge", null)]
-    [InlineData("frame", null)]
-    [InlineData("synthesize", null)]
-    [InlineData("lens", "warcraft")]
-    public async Task LoadAsync_LoadsCheckedInManifest(string modeName, string? lens)
+    [Fact]
+    public void CheckedInInventory_ContainsShippedModesAndLensVariant()
     {
-        var loader = new FileModeLoader(FindRepositoryModesRoot());
+        var cases = CheckedInModeCases.All;
+
+        Assert.Contains(("frame", (string?)null), cases);
+        Assert.Contains(("challenge", (string?)null), cases);
+        Assert.Contains(("synthesize", (string?)null), cases);
+        Assert.Contains(("lens", (string?)"warcraft"), cases);
+    }
+
+    public static TheoryData<string, string?> CheckedInCases => CheckedInModeCases.Data();
+
+    [Theory]
+    [MemberData(nameof(CheckedInCases))]
+    public async Task LoadAsync_ValidatesCheckedInModeAndPromptVariant(string modeName, string? lens)
+    {
+        var loader = new FileModeLoader(CheckedInModeCases.ModesRoot);
 
         var mode = await loader.LoadAsync(modeName, lens);
 
         Assert.Equal(modeName, mode.Manifest.Name);
-        Assert.Equal(3, mode.Phases.Count);
-        Assert.All(mode.Phases, phase => Assert.NotEmpty(phase.Prompt));
-    }
+        Assert.False(string.IsNullOrWhiteSpace(mode.Manifest.Description));
+        Assert.False(string.IsNullOrWhiteSpace(mode.Documentation));
+        Assert.Equal(
+            [PhaseKind.Main, PhaseKind.Critic, PhaseKind.Revision],
+            mode.Phases.Select(phase => phase.Kind));
 
-    private static string FindRepositoryModesRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null &&
-               !File.Exists(Path.Combine(directory.FullName, "CognitiveRuntime.slnx")))
+        // Exact binding: each phase body must come from the expected directory.
+        var promptDirectory = CheckedInModeCases.PromptDirectory(modeName, lens);
+        foreach (var phase in mode.Phases)
         {
-            directory = directory.Parent;
+            Assert.False(string.IsNullOrWhiteSpace(phase.Prompt));
+            var expected = await File.ReadAllTextAsync(
+                Path.Combine(promptDirectory, phase.Kind.ToString().ToLowerInvariant() + ".md"));
+            Assert.Equal(expected, phase.Prompt);
         }
 
-        return directory is null
-            ? throw new InvalidOperationException("Could not locate CognitiveRuntime.slnx.")
-            : Path.Combine(directory.FullName, "modes");
+        Assert.True(mode.Manifest.OutputContract.MinimumLength >= 1);
+        Assert.NotEmpty(mode.Manifest.OutputContract.RequiredHeadings);
+        Assert.All(
+            mode.Manifest.OutputContract.RequiredHeadings,
+            heading => Assert.False(string.IsNullOrWhiteSpace(heading)));
+    }
+
+    [Theory]
+    [InlineData("frame", new[] { "## Problem", "## Objective", "## Constraints", "## Unknowns", "## Next Actions" })]
+    [InlineData("challenge", new[] { "## Target Claim", "## Assumptions", "## Failure Modes", "## Counterarguments", "## Tests" })]
+    [InlineData("synthesize", new[] { "## Shared Ground", "## Tensions", "## Synthesis", "## Tradeoffs", "## Recommendation" })]
+    [InlineData("lens", new[] { "## The Concept", "## The Lens", "## The Mapping", "## Where It Breaks Down", "## Plain Translation" })]
+    public async Task LoadAsync_CheckedInOutputContracts_MatchExpectations(
+        string modeName,
+        string[] headings)
+    {
+        var lens = modeName == "lens" ? "warcraft" : null;
+        var mode = await new FileModeLoader(CheckedInModeCases.ModesRoot).LoadAsync(modeName, lens);
+
+        Assert.Equal(headings, mode.Manifest.OutputContract.RequiredHeadings);
+        Assert.Equal(200, mode.Manifest.OutputContract.MinimumLength);
+    }
+
+    [Fact]
+    public async Task LoadAsync_WarcraftLens_UsesWarcraftPromptsForEveryPhase()
+    {
+        var mode = await new FileModeLoader(CheckedInModeCases.ModesRoot)
+            .LoadAsync("lens", "warcraft");
+
+        Assert.Equal(3, mode.Phases.Count);
+        Assert.All(
+            mode.Phases,
+            phase => Assert.Contains("warcraft", phase.Prompt, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(0, "## Problem")]
+    [InlineData(-1, "## Problem")]
+    [InlineData(10, "")]
+    [InlineData(10, "   ")]
+    public async Task LoadAsync_RejectsInvalidOutputContract(int minimumLength, string heading)
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame", requiredHeadings: [heading]);
+        var path = Path.Combine(dir, "mode.json");
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        root["outputContract"]!["minimumLength"] = minimumLength;
+        File.WriteAllText(path, root.ToJsonString());
+
+        var exception = await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("frame"));
+
+        Assert.Contains("output contract", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_VariantOnlyModeWithoutLens_ListsLensesInOrder()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("lens");
+        MoveDefaultPromptsToVariants(dir, "zeta", "alpha");
+
+        var exception = await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("lens"));
+
+        Assert.Contains("--lens", exception.Message);
+        Assert.Contains("alpha, zeta", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_PartialDefaultPrompts_ReportsMissingFileNotLens()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        Directory.CreateDirectory(Path.Combine(dir, "prompts", "extra"));
+        File.Delete(Path.Combine(dir, "prompts", "critic.md"));
+
+        var exception = await Assert.ThrowsAsync<ModeLoadException>(
+            () => new FileModeLoader(workspace.ModesRoot).LoadAsync("frame"));
+
+        Assert.Contains("prompts/critic.md", exception.Message);
+        Assert.DoesNotContain("--lens", exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_DefaultPromptsWithVariants_LoadsWithoutLens()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        Directory.CreateDirectory(Path.Combine(dir, "prompts", "extra"));
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.Equal("frame", mode.Manifest.Name);
+    }
+
+    internal static void MoveDefaultPromptsToVariants(string modeDirectory, params string[] lenses)
+    {
+        var prompts = Path.Combine(modeDirectory, "prompts");
+        string[] files = ["main.md", "critic.md", "revision.md"];
+        foreach (var lens in lenses)
+        {
+            var target = Directory.CreateDirectory(Path.Combine(prompts, lens)).FullName;
+            foreach (var file in files)
+            {
+                File.Copy(Path.Combine(prompts, file), Path.Combine(target, file));
+            }
+        }
+
+        foreach (var file in files)
+        {
+            File.Delete(Path.Combine(prompts, file));
+        }
     }
 
     private static ModePhaseManifest CreatePhase(

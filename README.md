@@ -70,10 +70,14 @@ Check a mode without a run:
 ```powershell
 dotnet run --project src/CognitiveRuntime.Cli -- modes validate frame
 dotnet run --project src/CognitiveRuntime.Cli -- modes validate frame --modes-root path/to/modes
+dotnet run --project src/CognitiveRuntime.Cli -- modes validate lens --lens warcraft
 ```
 
-Validation loads `mode.json`, `MODE.md`, and the default prompts through the
-same Core loader a run uses. It makes no model call, needs no credentials or
+Validation loads `mode.json`, `MODE.md`, and the prompts through the
+same Core loader a run uses. `--lens` selects the same prompt variant
+(`prompts/<lens>/`) a run does. A mode whose prompts exist only under lens
+variants, such as `lens`, needs it: without `--lens` validation prints the
+available lenses to stderr and exits 1. It makes no model call, needs no credentials or
 input file, and writes no run output. `--modes-root` defaults to `./modes`.
 
 Manifest rules enforced by validation (and by every run):
@@ -81,9 +85,10 @@ Manifest rules enforced by validation (and by every run):
 - A mode has exactly three phases, in this order: `main`, `critic`,
   `revision`. Each phase must declare its `kind` explicitly; omitting or
   repeating a kind is an error.
-- Phase names use only ASCII letters, digits, and hyphens (`A-Z`, `a-z`,
-  `0-9`, `-`), the same set as mode and lens names. Names must be unique
-  ignoring case.
+- Phase names start with an ASCII letter or digit and then use only
+  letters, digits, and hyphens (`A-Z`, `a-z`, `0-9`, `-`), the same rule as
+  mode and lens names (a leading letter or digit keeps a lens name from
+  reading as a command-line option). Names must be unique ignoring case.
 - Prompt paths are relative to the mode directory. `/` and `\` both work as
   separators and `.`/`..` segments are resolved, but rooted paths (leading
   slash or backslash, drive letters, UNC) are rejected on every platform. A

@@ -171,7 +171,7 @@ internal sealed class CliApplication
             cancellationToken.ThrowIfCancellationRequested();
             await new FileModeLoader(modesRoot).LoadAsync(
                 modeName,
-                lens: null,
+                parsed.Lens,
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -193,7 +193,9 @@ internal sealed class CliApplication
             return ExitCodes.RuntimeFailed;
         }
 
-        output.WriteLine($"Mode '{modeName}' is valid.");
+        output.WriteLine(parsed.Lens is null
+            ? $"Mode '{modeName}' is valid."
+            : $"Mode '{modeName}' with lens '{parsed.Lens}' is valid.");
         return ExitCodes.Success;
     }
 
@@ -209,10 +211,12 @@ internal sealed class CliApplication
         writer.WriteLine(ModeValidationArguments.Usage);
         writer.WriteLine();
         writer.WriteLine(
-            "Loads the mode manifest and default prompts through the runtime " +
-            "loader. No model call is made and no run output is written.");
+            "Loads the mode manifest and prompts through the runtime loader. " +
+            "A mode whose prompts live under lens variants needs --lens. " +
+            "No model call is made and no run output is written.");
         writer.WriteLine();
         writer.WriteLine("Options:");
+        writer.WriteLine("  --lens <name>         Prompt variant to validate, as in a run.");
         writer.WriteLine("  --modes-root <path>   Defaults to ./modes.");
         writer.WriteLine();
         writer.WriteLine("Exit codes:");
@@ -413,7 +417,7 @@ internal sealed class CliApplication
             "--mode <name> --input <path> [options]");
         writer.WriteLine(
             "  dotnet run --project src/CognitiveRuntime.Cli -- " +
-            "modes validate <mode> [--modes-root <path>]");
+            "modes validate <mode> [--lens <name>] [--modes-root <path>]");
         writer.WriteLine();
         writer.WriteLine("Options:");
         writer.WriteLine("  --mode <name>            Mode directory name.");

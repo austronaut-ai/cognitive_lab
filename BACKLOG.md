@@ -1329,6 +1329,8 @@ Acceptance:
 
 Full mock execution remains covered by `RT-001`.
 
+Status: Complete.
+
 ## Milestone 6: Offline Regression Harness
 
 Outcome: changes to modes and runtime behavior can be evaluated across a small,
