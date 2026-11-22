@@ -11,6 +11,7 @@ public sealed class FileModeLoader : IModeLoader
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         AllowTrailingCommas = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         ReadCommentHandling = JsonCommentHandling.Skip,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
@@ -64,7 +65,7 @@ public sealed class FileModeLoader : IModeLoader
         catch (JsonException exception)
         {
             throw new ModeLoadException(
-                $"Mode manifest '{manifestPath}' is not valid JSON.",
+                $"Mode manifest '{manifestPath}' could not be parsed: {exception.Message}",
                 exception);
         }
 
