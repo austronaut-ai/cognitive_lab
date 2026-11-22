@@ -11,6 +11,18 @@ public sealed class ModeLoadException : Exception
         : base(message, innerException)
     {
     }
+
+    internal ModeLoadException(string message, IReadOnlyList<string> requiredLenses)
+        : base(message)
+    {
+        RequiredLenses = requiredLenses;
+    }
+
+    /// <summary>
+    /// Set only when the mode cannot load without a lens: the lens names it
+    /// offers, in loader order. Lets a catalog list them without parsing the message.
+    /// </summary>
+    internal IReadOnlyList<string>? RequiredLenses { get; }
 }
 
 public sealed class ModelProviderException : Exception

@@ -1226,6 +1226,8 @@ Outcome: Phase names use a safe documented character set, prompt paths are
 unique, relative, and contained, required phases cannot be omitted or repeated,
 and unreferenced required prompts are detected.
 
+Status: Complete.
+
 Acceptance:
 
 - Phase names use a safe, documented character set.
@@ -1242,6 +1244,8 @@ so authors discover mistakes only by running the loop.
 
 Outcome: A CLI command validates a mode with no model call and no run output,
 with documented success and failure exit codes.
+
+Status: Complete.
 
 Suggested command:
 
@@ -1264,6 +1268,8 @@ reading the filesystem.
 
 Outcome: The CLI lists valid mode names, versions, descriptions, and phase
 order, surfacing invalid mode directories without blocking the valid ones.
+
+Status: Complete.
 
 Acceptance:
 
@@ -1324,6 +1330,8 @@ Acceptance:
 - Test data is shared without hiding mode- or lens-specific assertions.
 
 Full mock execution remains covered by `RT-001`.
+
+Status: Complete.
 
 ## Milestone 6: Offline Regression Harness
 
