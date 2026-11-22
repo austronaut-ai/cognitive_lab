@@ -40,13 +40,13 @@ public sealed class EvalRunner : IEvalRunner
             phaseResult => phaseResult.PhaseKind == PhaseKind.Critic);
         var revision = context.PhaseResults.FirstOrDefault(
             phaseResult => phaseResult.PhaseKind == PhaseKind.Revision);
-        var authoritative = context.PhaseResults.FirstOrDefault(
-            phaseResult =>
-                phaseResult.PhaseKind == context.Plan.AuthoritativePhaseKind);
+        var executedPhases = context.ExecutedPhases ?? MatchLoadedPhases(context);
+        var (authoritativeResult, authoritativePhase) =
+            ResolveAuthoritative(context, executedPhases);
         var mainContent = main?.Content ?? string.Empty;
         var criticContent = critic?.Content ?? string.Empty;
         var revisionContent = revision?.Content ?? string.Empty;
-        var authoritativeContent = authoritative?.Content ?? string.Empty;
+        var authoritativeContent = authoritativeResult?.Content ?? string.Empty;
 
         var events = context.TraceEvents;
         var checks = new List<EvalCheckResult>
@@ -73,9 +73,10 @@ public sealed class EvalRunner : IEvalRunner
                 context.Plan.AuthoritativePhaseKind,
                 authoritativeContent));
         checks.Add(
-            _outputContractValidator.Validate(
+            CheckFinalContract(
                 authoritativeContent,
-                context.Mode.Manifest.OutputContract));
+                authoritativePhase,
+                context.Plan.AuthoritativePhaseKind));
 
         if (context.Plan.Execution is not null)
         {
@@ -91,15 +92,145 @@ public sealed class EvalRunner : IEvalRunner
         if (context.Plan.EvaluateLoopEfficacy)
         {
             checks.Add(
-                _loopEfficacyEvaluator.Evaluate(
+                CheckLoopEfficacy(
                     mainContent,
                     criticContent,
                     revisionContent,
-                    context.Mode.Manifest.OutputContract));
+                    FindPhase(context.Mode, PhaseKind.Revision)?.OutputContract));
         }
+
+        checks.AddRange(CheckDeclaredPhaseContracts(executedPhases));
 
         return new EvalReport(checks);
     }
+
+    private const string OutputContractCheckName = "output contract satisfied";
+
+    /// <summary>
+    /// Validates the raw authoritative output against the contract the loader
+    /// resolved for the authoritative phase (the revision in a critic loop).
+    /// </summary>
+    private EvalCheckResult CheckFinalContract(
+        string authoritativeContent,
+        LoadedPhase? authoritativePhase,
+        PhaseKind authoritativeKind)
+    {
+        if (authoritativePhase?.OutputContract is not { } contract)
+        {
+            return new EvalCheckResult(
+                OutputContractCheckName,
+                false,
+                $"No output contract was resolved for the authoritative " +
+                $"{FormatKind(authoritativeKind)} phase.");
+        }
+
+        return _outputContractValidator.Validate(authoritativeContent, contract);
+    }
+
+    private EvalCheckResult CheckLoopEfficacy(
+        string draft,
+        string criticContent,
+        string revision,
+        OutputContract? revisionContract) =>
+        revisionContract is null
+            ? new EvalCheckResult(
+                "loop responded to critic findings",
+                false,
+                "No output contract was resolved for the revision phase.")
+            : _loopEfficacyEvaluator.Evaluate(draft, criticContent, revision, revisionContract);
+
+    /// <summary>
+    /// Adds one check per executed phase that declared its own contract. Inherited
+    /// contracts get no standalone check, so legacy modes report exactly as before.
+    /// These checks add to, and never replace, the final-result check.
+    /// </summary>
+    private IEnumerable<EvalCheckResult> CheckDeclaredPhaseContracts(
+        IReadOnlyList<EvalPhaseInput> executedPhases)
+    {
+        var declared = executedPhases
+            .Where(input => input.Phase.DeclaresOutputContract && input.Phase.OutputContract is not null)
+            .ToArray();
+        var repeatedNames = declared
+            .GroupBy(input => input.Phase.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var input in declared)
+        {
+            var name = $"{OutputContractCheckName} for phase {input.Phase.Name}";
+            if (repeatedNames.Contains(input.Phase.Name))
+            {
+                name += $" (node {input.NodeId})";
+            }
+
+            yield return _outputContractValidator.Validate(
+                input.Result.Content,
+                input.Phase.OutputContract!) with { Name = name };
+        }
+    }
+
+    /// <summary>
+    /// Resolves the authoritative node once, so the final checks read its raw
+    /// output and its resolved contract from the same node. When the plan names
+    /// an authoritative node, that node wins: first from the executed phase
+    /// inputs, then from the node-result map paired with its loaded phase. Only
+    /// callers without node data fall back to the first result and loaded phase
+    /// of the authoritative kind.
+    /// </summary>
+    private static (PhaseResult? Result, LoadedPhase? Phase) ResolveAuthoritative(
+        EvalContext context,
+        IReadOnlyList<EvalPhaseInput> executedPhases)
+    {
+        var kind = context.Plan.AuthoritativePhaseKind;
+        var nodeId = context.Plan.Execution?.AuthoritativeNodeId;
+        if (nodeId is not null)
+        {
+            var authoritativeNode = executedPhases.FirstOrDefault(
+                input => string.Equals(input.NodeId, nodeId, StringComparison.Ordinal));
+            if (authoritativeNode is not null)
+            {
+                return (authoritativeNode.Result, authoritativeNode.Phase);
+            }
+
+            if (context.NodeResultsById?.TryGetValue(nodeId, out var mapped) == true)
+            {
+                return (mapped, MatchLoadedPhase(context.Mode, mapped) ?? FindPhase(context.Mode, kind));
+            }
+        }
+
+        return (
+            context.PhaseResults.FirstOrDefault(result => result.PhaseKind == kind),
+            FindPhase(context.Mode, kind));
+    }
+
+    private static LoadedPhase? FindPhase(LoadedMode mode, PhaseKind kind) =>
+        mode.Phases.FirstOrDefault(phase => phase.Kind == kind);
+
+    private static LoadedPhase? MatchLoadedPhase(LoadedMode mode, PhaseResult result) =>
+        mode.Phases.FirstOrDefault(
+            phase => phase.Kind == result.PhaseKind &&
+                string.Equals(phase.Name, result.PhaseName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// For direct callers that supply no execution inputs, pairs each result
+    /// with the loaded phase of the same kind and name. Node IDs come from the
+    /// node-result map when one is supplied, and from phase names otherwise.
+    /// </summary>
+    private static IReadOnlyList<EvalPhaseInput> MatchLoadedPhases(EvalContext context)
+    {
+        var results = context.NodeResultsById is { Count: > 0 } nodeResults
+            ? nodeResults.Select(pair => (NodeId: pair.Key, Result: pair.Value))
+            : context.PhaseResults.Select(result => (NodeId: result.PhaseName, Result: result));
+
+        return results
+            .Select(match => (match.NodeId, match.Result, Phase: MatchLoadedPhase(context.Mode, match.Result)))
+            .Where(match => match.Phase is not null)
+            .Select(match => new EvalPhaseInput(match.NodeId, match.Phase!, match.Result))
+            .ToArray();
+    }
+
+    private static string FormatKind(PhaseKind kind) => kind.ToString().ToLowerInvariant();
 
     public static string RenderMarkdown(EvalReport report)
     {

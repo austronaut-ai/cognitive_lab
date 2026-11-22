@@ -91,7 +91,11 @@ public sealed class FileModeLoader : IModeLoader
                     $"Prompt '{phase.Prompt}' for phase '{phase.Name}' is empty.");
             }
 
-            phases.Add(new LoadedPhase(phase.Name, phase.Kind, prompt));
+            phases.Add(new LoadedPhase(phase.Name, phase.Kind, prompt)
+            {
+                OutputContract = PhaseContractDefaults.Resolve(phase, manifest.OutputContract),
+                DeclaresOutputContract = phase.OutputContractSpecified
+            });
         }
 
         var documentation = await File.ReadAllTextAsync(
@@ -419,12 +423,49 @@ public sealed class FileModeLoader : IModeLoader
             }
         }
 
-        if (manifest.OutputContract.MinimumLength < 1 ||
-            manifest.OutputContract.RequiredHeadings.Count == 0 ||
-            manifest.OutputContract.RequiredHeadings.Any(string.IsNullOrWhiteSpace))
+        ValidateContractRules(manifest.OutputContract, "The output contract");
+
+        for (var index = 0; index < manifest.Phases.Count; index++)
+        {
+            ValidatePhaseContract(index, manifest.Phases[index]);
+        }
+    }
+
+    /// <summary>
+    /// Applies the mode-level contract rules to a phase's own contract when the
+    /// manifest supplies one. Omission is allowed and takes the runtime default.
+    /// </summary>
+    private static void ValidatePhaseContract(int index, ModePhaseManifest phase)
+    {
+        if (!phase.OutputContractSpecified)
+        {
+            return;
+        }
+
+        var field = $"Phase {index + 1} ('{phase.Name}') field 'outputContract'";
+        if (phase.OutputContract is null)
         {
             throw new ModeLoadException(
-                "The output contract requires a positive minimum length and at least one heading.");
+                $"{field} must be an object, not null; omit it to use the runtime default.");
+        }
+
+        if (phase.OutputContract.RequiredHeadings is null)
+        {
+            throw new ModeLoadException(
+                $"{field}.requiredHeadings must be an array of headings, not null.");
+        }
+
+        ValidateContractRules(phase.OutputContract, $"{field} (output contract)");
+    }
+
+    private static void ValidateContractRules(OutputContract contract, string subject)
+    {
+        if (contract.MinimumLength < 1 ||
+            contract.RequiredHeadings.Count == 0 ||
+            contract.RequiredHeadings.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ModeLoadException(
+                $"{subject} requires a positive minimum length and at least one heading.");
         }
     }
 

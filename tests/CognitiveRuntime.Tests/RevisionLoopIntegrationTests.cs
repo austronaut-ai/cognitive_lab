@@ -210,6 +210,98 @@ public sealed class RevisionLoopIntegrationTests
                 .GetBoolean());
     }
 
+    [Fact]
+    public async Task RunAsync_WritesIndependentDeclaredPhaseChecks()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode(
+            phases:
+            [
+                DeclaredPhase("main", PhaseKind.Main, "## Draft", "## Decision"),
+                DeclaredPhase("critic", PhaseKind.Critic, "## Findings"),
+                DeclaredPhase("revision", PhaseKind.Revision, "## Decision")
+            ]);
+        var modelClient = new FixedPhaseModelClient();
+        var orchestrator = CreateOrchestrator(
+            workspace,
+            TimeProvider.System,
+            modelClient);
+
+        var result = await orchestrator.RunAsync(
+            new RunRequest(
+                "frame",
+                "Exercise declared per-phase contracts.",
+                modelClient.ProviderName,
+                workspace.OutputRoot));
+
+        var evalMarkdown = await File.ReadAllTextAsync(result.EvalReportPath);
+        // The revision omits every mode-level heading, so a pass proves the final
+        // check and loop efficacy used the revision's declared contract.
+        Assert.Equal(RunOutcome.Success, result.Outcome);
+        Assert.Contains("Overall: **PASS**", evalMarkdown);
+        Assert.Contains("- [x] output contract satisfied: ", evalMarkdown);
+        Assert.Contains("- [x] loop responded to critic findings: ", evalMarkdown);
+        Assert.Contains("- [x] output contract satisfied for phase main: ", evalMarkdown);
+        Assert.Contains("- [x] output contract satisfied for phase critic: ", evalMarkdown);
+        Assert.Contains("- [x] output contract satisfied for phase revision: ", evalMarkdown);
+    }
+
+    [Fact]
+    public async Task RunAsync_LegacyManifestWritesNoStandalonePhaseChecks()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.CreateMode();
+        var orchestrator = CreateOrchestrator(workspace, TimeProvider.System);
+
+        var result = await orchestrator.RunAsync(
+            new RunRequest(
+                "frame",
+                "Exercise the legacy contract defaults.",
+                "mock",
+                workspace.OutputRoot));
+
+        var evalMarkdown = await File.ReadAllTextAsync(result.EvalReportPath);
+        Assert.Equal(RunOutcome.Success, result.Outcome);
+        Assert.Contains("- [x] output contract satisfied: ", evalMarkdown);
+        Assert.DoesNotContain("output contract satisfied for phase", evalMarkdown);
+    }
+
+    private static ModePhaseManifest DeclaredPhase(
+        string name,
+        PhaseKind kind,
+        params string[] headings) =>
+        new()
+        {
+            Name = name,
+            Kind = kind,
+            Prompt = $"prompts/{name}.md",
+            OutputContract = new OutputContract
+            {
+                RequiredHeadings = [.. headings],
+                MinimumLength = 5
+            }
+        };
+
+    private sealed class FixedPhaseModelClient : IModelClient
+    {
+        public string ProviderName => "fixed-phase";
+
+        public Task<ModelResponse> CompleteAsync(
+            ModelRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var content = request.PhaseKind switch
+            {
+                PhaseKind.Main =>
+                    "## Draft\n\nInitial framing.\n\n## Decision\n\nUndecided for now.",
+                PhaseKind.Critic =>
+                    "## Findings\n\n- [Decision] State a concrete decision.",
+                _ => "## Decision\n\nAdopt the boring runtime primitive."
+            };
+            return Task.FromResult(new ModelResponse(content, ProviderName, "fixed"));
+        }
+    }
+
     private sealed class CapturingModelClient : IModelClient
     {
         private readonly MockModelClient _inner = new();

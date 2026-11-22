@@ -240,7 +240,13 @@ public sealed class Orchestrator
                                 StringComparison.Ordinal))
                         .PhaseResult
                         .Content,
-                    state.ArtifactLedger),
+                    state.ArtifactLedger,
+                    state.Execution.NodeResults
+                        .Select(nodeResult => new EvalPhaseInput(
+                            nodeResult.Node.Id,
+                            nodeResult.Phase,
+                            nodeResult.PhaseResult))
+                        .ToArray()),
                 cancellationToken);
             state = RunStateUpdates.CompleteEvaluation(state, evalReport);
             await PersistRunAsync(

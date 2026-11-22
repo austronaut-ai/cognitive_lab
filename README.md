@@ -102,6 +102,32 @@ Manifest rules enforced by validation (and by every run):
   `prompts/revision.md`) must each be referenced by a phase, using that exact
   spelling. With `--lens <name>` the required paths are the lens equivalents
   (`prompts/<name>/main.md`, and so on).
+- The mode-level `outputContract` is required: `requiredHeadings` must list at
+  least one non-blank heading and `minimumLength` (default `1`) must be at
+  least `1`.
+- A phase may also carry its own optional `outputContract` with the same shape
+  and rules. An explicit `null` is rejected; omit the field to take the runtime
+  default. Unknown properties beside or inside it are rejected like any other.
+
+Per-phase contract defaults are resolved once when the mode loads
+(`PhaseContractDefaults` in Core), so every consumer sees the same contract
+per phase:
+
+| Phase | Declares `outputContract` | Does not declare it |
+| --- | --- | --- |
+| `main` | its own contract | the mode-level `outputContract` |
+| `critic` | its own contract | no structural contract; not checked |
+| `revision` | its own contract | the mode-level `outputContract` |
+
+The `output contract satisfied` eval check validates the raw authoritative
+output against that phase's resolved contract: the revision in a critic loop,
+the main phase in a single pass. Loop efficacy uses the revision's resolved
+contract. Each executed phase that declares its own contract also gets a
+separate check, `output contract satisfied for phase <name>` (with
+`(node <id>)` appended when several executed nodes share a phase name), against
+its own output. These checks add to the final check and never replace it;
+inherited contracts produce no extra check, so the shipped modes report exactly
+as before.
 
 | Exit code | Meaning |
 | --- | --- |
