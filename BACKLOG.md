@@ -1443,6 +1443,15 @@ Acceptance:
 
 Priority: `P1`
 
+Status: Complete. See `ContractMutationTests` in
+`tests/CognitiveRuntime.Tests/`. Terminal trace integrity is a post-run check
+(`EvalRunner` runs before `run.finalized` is emitted), so the fixtures compose
+`TerminalTraceIntegrityEvaluator` with the `EvalRunner` checks. Every check a
+frame evaluation reports has at least one fixture that fails it, and a test
+enforces that rule. Two fixtures fail a pair of checks that cannot fail apart:
+a lost main `model.completed` (main phase and model call pairing) and a blank
+authoritative output (non-empty revision and output contract).
+
 Motivation: The deterministic evals are assumed to catch malformed output, but
 nothing proves each one fails for its intended reason rather than by accident.
 
