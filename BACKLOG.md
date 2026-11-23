@@ -1392,6 +1392,9 @@ orchestrator deterministically.
 Outcome: A Core runner executes cases through the normal orchestrator with
 deterministic ordering, and one case failure does not stop later cases.
 
+Status: Complete. `EvalSuiteRunner` in `CognitiveRuntime.Core` runs loaded cases
+and returns a typed `EvalSuiteResult`; see "Offline Eval Cases" in `README.md`.
+
 Acceptance:
 
 - The runner executes cases through the normal orchestrator.

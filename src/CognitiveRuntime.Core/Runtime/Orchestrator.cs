@@ -330,7 +330,10 @@ public sealed class Orchestrator
                 state.Artifacts.TracePath,
                 state.Artifacts.EvalReportPath,
                 state.Outcome!.Value,
-                htmlViewPath);
+                htmlViewPath)
+            {
+                Evaluation = state.EvalReport
+            };
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
