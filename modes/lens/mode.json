@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "name": "lens",
   "description": "Explain a concept through a hobbyist's frame of reference, selected by the runtime via --lens.",
   "version": 1,

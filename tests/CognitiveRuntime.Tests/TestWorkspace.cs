@@ -48,6 +48,7 @@ internal sealed class TestWorkspace : IDisposable
 
         var manifest = new ModeManifest
         {
+            SchemaVersion = 1,
             Name = name,
             Description = "Test mode.",
             Version = 1,

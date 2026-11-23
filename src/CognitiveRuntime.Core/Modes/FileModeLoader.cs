@@ -8,12 +8,27 @@ namespace CognitiveRuntime.Core.Modes;
 
 public sealed class FileModeLoader : IModeLoader
 {
+    /// <summary>
+    /// The one <c>mode.json</c> schema version this runtime reads. A manifest must declare exactly this value
+    /// in its top-level <c>schemaVersion</c>; the mode's own <c>version</c> is unrelated.
+    /// </summary>
+    public const int SupportedSchemaVersion = 1;
+
+    private const string SchemaVersionField = "schemaVersion";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         AllowTrailingCommas = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         ReadCommentHandling = JsonCommentHandling.Skip,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+
+    // Same comment and trailing-comma tolerance as JsonOptions, for the raw schema-version check.
+    private static readonly JsonDocumentOptions DocumentOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip
     };
 
     private static readonly string[] RequiredPromptReferences =
@@ -62,6 +77,7 @@ public sealed class FileModeLoader : IModeLoader
         try
         {
             var json = await File.ReadAllTextAsync(manifestPath, cancellationToken);
+            RequireSupportedSchemaVersion(manifestPath, json);
             manifest = JsonSerializer.Deserialize<ModeManifest>(json, JsonOptions)
                 ?? throw new ModeLoadException(
                     $"Mode manifest '{manifestPath}' was empty.");
@@ -331,6 +347,49 @@ public sealed class FileModeLoader : IModeLoader
             .Where(IsSafeName)
             .Order(StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Checks the raw top-level <c>schemaVersion</c> token before the manifest is interpreted, so an
+    /// unsupported manifest is reported as such rather than by whichever field changed, and so the serializer
+    /// cannot coerce a quoted number. The field is located the way the serializer binds it (ignoring case).
+    /// Declaring it more than once is an error, so deserialization only ever sees the one declaration this
+    /// check accepted. Malformed JSON throws
+    /// <see cref="JsonException"/>; a root that is not an object is left for deserialization to report.
+    /// </summary>
+    private static void RequireSupportedSchemaVersion(string manifestPath, string json)
+    {
+        using var document = JsonDocument.Parse(json, DocumentOptions);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var declarations = document.RootElement.EnumerateObject()
+            .Where(property => string.Equals(property.Name, SchemaVersionField, StringComparison.OrdinalIgnoreCase))
+            .Select(property => property.Value)
+            .ToList();
+        if (declarations.Count > 1)
+        {
+            throw new ModeLoadException(
+                $"Mode manifest '{manifestPath}' field '{SchemaVersionField}' is declared {declarations.Count} times " +
+                $"(names compare ignoring case); declare it once, as {SchemaVersionField} {SupportedSchemaVersion}.");
+        }
+
+        JsonElement? declared = declarations.Count == 1 ? declarations[0] : null;
+
+        if (declared is { ValueKind: JsonValueKind.Number } number &&
+            number.TryGetInt32(out var version) &&
+            version == SupportedSchemaVersion)
+        {
+            return;
+        }
+
+        var found = declared is { } value ? $"is {value.GetRawText()}" : "is missing";
+        throw new ModeLoadException(
+            $"Mode manifest '{manifestPath}' field '{SchemaVersionField}' {found}; this runtime supports " +
+            $"only {SchemaVersionField} {SupportedSchemaVersion} (an integer, separate from the mode's " +
+            "'version').");
     }
 
     private static string DescribeJsonError(JsonException exception)

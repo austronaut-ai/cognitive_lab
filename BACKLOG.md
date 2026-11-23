@@ -1198,6 +1198,8 @@ Acceptance:
 - Unsupported schema versions fail clearly.
 - Existing modes migrate together.
 
+Status: Complete.
+
 ### MO-002 - Reject unknown manifest properties
 
 Priority: `P1`

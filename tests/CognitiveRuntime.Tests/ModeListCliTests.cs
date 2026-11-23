@@ -101,6 +101,30 @@ public sealed class ModeListCliTests
     }
 
     [Fact]
+    public async Task List_UnsupportedManifestSchemaVersion_ReportsInvalidModeAndListsValidModes()
+    {
+        using var workspace = new TestWorkspace();
+        var invalid = workspace.CreateMode("alpha");
+        var manifestPath = Path.Combine(invalid, "mode.json");
+        var json = File.ReadAllText(manifestPath);
+        Assert.Contains("\"schemaVersion\": 1", json);
+        File.WriteAllText(manifestPath, json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 2"));
+        workspace.CreateMode("beta");
+
+        var result = await RunAsync("list", "--modes-root", workspace.ModesRoot);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(1, result.Out.Split("Mode: ").Length - 1);
+        Assert.Contains("Mode: beta", result.Out);
+        Assert.DoesNotContain("alpha", result.Out);
+        Assert.Contains("Mode 'alpha' is invalid:", result.Err);
+        Assert.Contains(
+            "field 'schemaVersion' is 2; this runtime supports only schemaVersion 1",
+            result.Err);
+        Assert.DoesNotContain("beta", result.Err);
+    }
+
+    [Fact]
     public async Task List_DirectoryWithoutManifest_IsReportedAndLaterModesStillListed()
     {
         using var workspace = new TestWorkspace();

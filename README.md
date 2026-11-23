@@ -82,6 +82,13 @@ input file, and writes no run output. `--modes-root` defaults to `./modes`.
 
 Manifest rules enforced by validation (and by every run):
 
+- The top-level `schemaVersion` is required and must be the integer `1`, the
+  only `mode.json` format this runtime supports. It versions the manifest
+  format; `version` is separate and tracks the mode's own content. A missing
+  `schemaVersion` or any other value (`2`, `"1"`, `1.0`, `null`) fails loading
+  with an error naming the field, the value found, and the supported version.
+  Declare it once: a second `schemaVersion` (names compare ignoring case) is
+  an error too.
 - Unknown properties anywhere in `mode.json` are rejected, so a misspelled
   field fails loading instead of being ignored. Comments and trailing commas
   are accepted.

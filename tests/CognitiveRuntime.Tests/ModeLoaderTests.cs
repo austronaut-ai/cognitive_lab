@@ -11,12 +11,17 @@ public sealed class ModeLoaderTests
     public async Task LoadAsync_LoadsManifestDocumentationAndPrompts()
     {
         using var workspace = new TestWorkspace();
-        workspace.CreateMode();
+        var modeDirectory = workspace.CreateMode();
+        // A content version that differs from the schema version: the two fields are independent.
+        EditManifest(modeDirectory, root => root["version"] = 7);
         var loader = new FileModeLoader(workspace.ModesRoot);
 
         var mode = await loader.LoadAsync("frame");
 
         Assert.Equal("frame", mode.Manifest.Name);
+        Assert.Equal(FileModeLoader.SupportedSchemaVersion, mode.Manifest.SchemaVersion);
+        Assert.Equal(1, mode.Manifest.SchemaVersion);
+        Assert.Equal(7, mode.Manifest.Version);
         Assert.Contains("# frame", mode.Documentation);
         Assert.Collection(
             mode.Phases,
@@ -523,6 +528,7 @@ public sealed class ModeLoaderTests
 
     private const string ValidManifestJson = """
         {
+          "schemaVersion": 1,
           "name": "frame",
           "description": "A test mode.",
           "version": 1,
@@ -574,6 +580,128 @@ public sealed class ModeLoaderTests
         Assert.Contains(offendingProperty, exception.Message);
     }
 
+    [Theory]
+    [InlineData(null, "is missing")]
+    [InlineData("0", "is 0")]
+    [InlineData("2", "is 2")]
+    [InlineData("-1", "is -1")]
+    [InlineData("\"1\"", "is \"1\"")]
+    [InlineData("null", "is null")]
+    [InlineData("true", "is true")]
+    [InlineData("[1]", "is [1]")]
+    [InlineData("{\"major\": 1}", "is {\"major\": 1}")]
+    [InlineData("1.0", "is 1.0")]
+    [InlineData("1e0", "is 1e0")]
+    [InlineData("4294967297", "is 4294967297")]
+    public async Task LoadAsync_RejectsUnsupportedManifestSchemaVersion(string? value, string found)
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        var manifestPath = Path.Combine(modeDirectory, "mode.json");
+        const string declaration = "\"schemaVersion\": 1,";
+        Assert.Contains(declaration, ValidManifestJson);
+        File.WriteAllText(
+            manifestPath,
+            ValidManifestJson.Replace(
+                declaration,
+                value is null ? string.Empty : $"\"schemaVersion\": {value},",
+                StringComparison.Ordinal));
+        WriteDocumentation(modeDirectory, "# frame\n\nmain -> critic -> revision\n\n`## Problem`\n");
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Equal(
+            $"Mode manifest '{manifestPath}' field 'schemaVersion' {found}; this runtime supports only " +
+            "schemaVersion 1 (an integer, separate from the mode's 'version').",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ManifestSchemaVersionFixtureLoadsWhenSupported()
+    {
+        // Guards the theory above: its fixture is valid apart from the schema version.
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        File.WriteAllText(Path.Combine(modeDirectory, "mode.json"), ValidManifestJson);
+        WriteDocumentation(modeDirectory, "# frame\n\nmain -> critic -> revision\n\n`## Problem`\n");
+
+        var mode = await new FileModeLoader(workspace.ModesRoot).LoadAsync("frame");
+
+        Assert.Equal(1, mode.Manifest.SchemaVersion);
+    }
+
+    [Theory]
+    [InlineData("\"SchemaVersion\": 2,", "is 2")]
+    [InlineData("\"SCHEMAVERSION\": 3,", "is 3")]
+    public async Task LoadAsync_SchemaVersionCheckMatchesSerializerPropertyLookup(
+        string declarations,
+        string found)
+    {
+        // The serializer binds the field ignoring case; the gate must find it the same way.
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        File.WriteAllText(
+            Path.Combine(modeDirectory, "mode.json"),
+            ValidManifestJson.Replace("\"schemaVersion\": 1,", declarations, StringComparison.Ordinal));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains($"field 'schemaVersion' {found};", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("1")]
+    [InlineData("2")]
+    [InlineData("[1]")]
+    public async Task LoadAsync_RejectsASchemaVersionDeclaredMoreThanOnce(string earlier)
+    {
+        // One declaration, compared ignoring case as the serializer binds it: a second one is an error rather
+        // than a rule about which of them wins.
+        foreach (var lastName in new[] { "SchemaVersion", "schemaVersion" })
+        {
+            using var workspace = new TestWorkspace();
+            var modeDirectory = workspace.CreateMode();
+            File.WriteAllText(
+                Path.Combine(modeDirectory, "mode.json"),
+                ValidManifestJson.Replace(
+                    "\"schemaVersion\": 1,",
+                    $"\"schemaVersion\": {earlier}, \"{lastName}\": 1,",
+                    StringComparison.Ordinal));
+
+            var exception = await LoadFailureAsync(workspace);
+
+            Assert.Contains("field 'schemaVersion' is declared 2 times", exception.Message);
+            Assert.Contains("declare it once, as schemaVersion 1", exception.Message);
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_UnsupportedSchemaVersionIsReportedBeforeUnknownProperties()
+    {
+        using var workspace = new TestWorkspace();
+        var modeDirectory = workspace.CreateMode();
+        File.WriteAllText(
+            Path.Combine(modeDirectory, "mode.json"),
+            ValidManifestJson.Replace(
+                "\"schemaVersion\": 1,",
+                "\"schemaVersion\": 2, \"futureField\": true,",
+                StringComparison.Ordinal));
+
+        var exception = await LoadFailureAsync(workspace);
+
+        Assert.Contains("field 'schemaVersion' is 2;", exception.Message);
+        Assert.DoesNotContain("futureField", exception.Message);
+    }
+
+    private static void EditManifest(string modeDirectory, Action<JsonObject> edit)
+    {
+        var path = Path.Combine(modeDirectory, "mode.json");
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        edit(root);
+        File.WriteAllText(path, root.ToJsonString());
+    }
+
     [Fact]
     public async Task LoadAsync_RejectsMalformedManifestJson()
     {
@@ -600,6 +728,7 @@ public sealed class ModeLoaderTests
             """
             // line comment
             {
+              "schemaVersion": 1, // the manifest format, not the mode content
               "name": "frame", /* block comment */
               "description": "A test mode.",
               "version": 1,
