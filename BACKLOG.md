@@ -1214,6 +1214,8 @@ Acceptance:
 - Errors include the manifest path and offending property.
 - Tests cover malformed JSON and valid comments/trailing commas behavior.
 
+Status: Complete.
+
 ### MO-003 - Strengthen phase validation
 
 Priority: `P1`

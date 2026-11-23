@@ -74,6 +74,7 @@ modes/
   frame/
   challenge/
   synthesize/
+  lens/
 
 examples/
 outputs/
@@ -220,6 +221,8 @@ Initial modes:
 * `challenge`
 * `synthesize`
 
+`lens` was added later; it has lens variants only.
+
 Each mode must include:
 
 ```text
@@ -227,7 +230,12 @@ MODE.md
 mode.json
 prompts/main.md
 prompts/critic.md
+prompts/revision.md
 ```
+
+A mode whose prompts exist only as lens variants (for example `lens`) keeps
+the same three files under `prompts/<lens>/` instead and must be run with
+`--lens <name>`.
 
 Do not hardcode mode behavior in C# if it belongs in mode files.
 

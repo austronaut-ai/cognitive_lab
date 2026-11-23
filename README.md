@@ -1,6 +1,6 @@
 # Cognitive Agent Runtime Lab
 
-[![CI](https://github.com/aukwill/cognitive_lab/actions/workflows/ci.yml/badge.svg)](https://github.com/aukwill/cognitive_lab/actions/workflows/ci.yml)
+[![CI](https://github.com/austronaut-ai/cognitive_lab/actions/workflows/ci.yml/badge.svg)](https://github.com/austronaut-ai/cognitive_lab/actions/workflows/ci.yml)
 
 A local-first C#/.NET environment for running, comparing, and inspecting
 bounded agent orchestration patterns. The runtime owns the loop; the model
@@ -82,6 +82,9 @@ input file, and writes no run output. `--modes-root` defaults to `./modes`.
 
 Manifest rules enforced by validation (and by every run):
 
+- Unknown properties anywhere in `mode.json` are rejected, so a misspelled
+  field fails loading instead of being ignored. Comments and trailing commas
+  are accepted.
 - A mode has exactly three phases, in this order: `main`, `critic`,
   `revision`. Each phase must declare its `kind` explicitly; omitting or
   repeating a kind is an error.
