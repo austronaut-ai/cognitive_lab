@@ -31,6 +31,41 @@ internal static class EvalCasePaths
         Path.IsPathRooted(reference);
 
     /// <summary>
+    /// True when <paramref name="value"/> can name one directory on any OS: not empty, rooted, <c>.</c> or
+    /// <c>..</c>; no separator, control character, or character Windows forbids in a file name; no trailing
+    /// dot or space; and not a Windows device name such as <c>CON</c> or <c>COM1.txt</c>. Windows rules are
+    /// applied everywhere so a case means the same thing on every machine.
+    /// </summary>
+    public static bool IsSafeComponent(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value is "." or ".." || IsRooted(value))
+        {
+            return false;
+        }
+
+        if (value.Any(character => char.IsControl(character) || ForbiddenNameCharacters.Contains(character)) ||
+            value[^1] is '.' or ' ')
+        {
+            return false;
+        }
+
+        // Windows resolves a device name whatever its extension or trailing spaces: "NUL.txt" is still NUL.
+        var stem = value.Split('.')[0].TrimEnd(' ');
+        return !WindowsDeviceNames.Contains(stem);
+    }
+
+    private const string ForbiddenNameCharacters = "/\\:*?\"<>|";
+
+    private static readonly HashSet<string> WindowsDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "COM¹", "COM²", "COM³",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "LPT¹", "LPT²", "LPT³"
+    };
+
+    /// <summary>
     /// Resolves a case-relative reference to a full path inside <paramref name="root"/>. Either separator
     /// style is accepted, and <c>..</c> is allowed when the normalized target stays inside the root. The
     /// target must be strictly below the root unless <paramref name="allowRoot"/> is set, which also accepts

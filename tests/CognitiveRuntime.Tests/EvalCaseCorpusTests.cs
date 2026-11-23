@@ -7,8 +7,8 @@ namespace CognitiveRuntime.Tests;
 
 /// <summary>
 /// Keeps the checked-in corpus under <c>examples/evals</c> honest: every case loads, and every case's
-/// expectations hold against the eval report of a real mock-provider run, so the corpus cannot drift from
-/// the runtime. This is a test, not the reusable suite runner.
+/// expectations hold when <see cref="EvalSuiteRunner"/> runs it through the normal orchestrator, so the
+/// corpus cannot drift from the runtime.
 /// </summary>
 public sealed class EvalCaseCorpusTests
 {
@@ -55,65 +55,81 @@ public sealed class EvalCaseCorpusTests
     [Fact]
     public async Task RunAsync_CheckedInCasesMatchEvalReports()
     {
-        foreach (var evalCase in await LoadCorpusAsync())
+        using var workspace = new TestWorkspace();
+        var cases = await LoadCorpusAsync();
+
+        var suite = await CreateRunner(workspace, workspace.OutputRoot).RunAsync(cases);
+
+        Assert.Equal(cases.Count, suite.Cases.Count);
+        Assert.All(suite.Cases, result => Assert.True(result.Status == EvalCaseStatus.Passed, Describe(result)));
+        Assert.Equal(cases.Count, suite.Passed);
+        Assert.Equal(0, suite.Failed);
+        Assert.Equal(0, suite.Errored);
+        Assert.True(
+            suite.Cases.Count(result => result.ActualEvaluation == EvalCaseOutcome.Fail) >= 2,
+            "The corpus needs at least two intentionally failing evaluations.");
+
+        foreach (var result in suite.Cases)
         {
-            await RunAndAssertAsync(evalCase);
+            var context = Describe(result);
+            Assert.NotNull(result.OutputDirectory);
+            Assert.Equal(
+                Path.Combine(workspace.OutputRoot, result.Case.Mode, result.Case.Name),
+                Path.GetDirectoryName(result.OutputDirectory));
+            Assert.Equal(result.Case.Expect.Evaluation, result.ActualEvaluation);
+            if (result.ActualEvaluation == EvalCaseOutcome.Fail)
+            {
+                var report = await File.ReadAllTextAsync(Path.Combine(result.OutputDirectory, "eval_report.md"));
+                AssertFailsOnlyForTheMissingFixtureHeading(report, $"{context} Report:{Environment.NewLine}{report}");
+            }
+
+            await AssertCompletedRunArtifactsAsync(result.OutputDirectory, context);
         }
     }
 
-    private static async Task RunAndAssertAsync(EvalCase evalCase)
+    [Fact]
+    public async Task RunAsync_CheckedInCorpusProducesEqualResultsAcrossRuns()
     {
         using var workspace = new TestWorkspace();
-        var orchestrator = RuntimeTestHarness.CreateOrchestrator(
-            workspace,
-            new FixedTimeProvider(new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero)),
-            modesRoot: evalCase.ModesRoot);
+        var cases = await LoadCorpusAsync();
 
-        var result = await orchestrator.RunAsync(
-            new RunRequest(
-                evalCase.Mode,
-                evalCase.Input,
-                "mock",
-                workspace.OutputRoot,
-                InputSource: evalCase.InputFile,
-                Lens: evalCase.Lens,
-                Pattern: evalCase.Pattern));
+        var first = await CreateRunner(workspace, Path.Combine(workspace.OutputRoot, "first")).RunAsync(cases);
+        var second = await CreateRunner(workspace, Path.Combine(workspace.OutputRoot, "second")).RunAsync(cases);
 
-        var report = await File.ReadAllTextAsync(result.EvalReportPath);
-        var context = $"Case '{evalCase.SourcePath}'. Report:{Environment.NewLine}{report}";
-        var expectPass = evalCase.Expect.Evaluation == EvalCaseOutcome.Pass;
-
-        Assert.True(result.Outcome == (expectPass ? RunOutcome.Success : RunOutcome.EvalFailed), context);
-        Assert.True(
-            report.Contains($"Overall: **{(expectPass ? "PASS" : "FAIL")}**", StringComparison.Ordinal),
-            context);
-        foreach (var (name, expected) in evalCase.Expect.Checks)
-        {
-            var rows = FindCheckRows(report, name);
-            Assert.True(rows.Count == 1, $"Expected exactly one '{name}' row, found {rows.Count}. {context}");
-            Assert.True(
-                rows[0] == (expected == EvalCaseOutcome.Pass),
-                $"Check '{name}' was expected to {expected}. {context}");
-        }
-
-        if (!expectPass)
-        {
-            AssertFailsOnlyForTheMissingFixtureHeading(report, context);
-        }
-
-        await AssertCompletedRunArtifactsAsync(result, context);
+        Assert.Equal(first.Passed, second.Passed);
+        Assert.Equal(first.Failed, second.Failed);
+        Assert.Equal(first.Errored, second.Errored);
+        Assert.Equal(first.Cases.Count, second.Cases.Count);
+        // Record equality compares a list member by reference, so the comparisons are compared as sequences.
+        Assert.All(
+            first.Cases.Zip(second.Cases),
+            pair =>
+            {
+                Assert.Equal(pair.First.Case, pair.Second.Case);
+                Assert.Equal(pair.First.Status, pair.Second.Status);
+                Assert.Equal(pair.First.ActualEvaluation, pair.Second.ActualEvaluation);
+                Assert.Equal(pair.First.Checks.AsEnumerable(), pair.Second.Checks);
+                Assert.Equal(pair.First.ErrorMessage, pair.Second.ErrorMessage);
+                Assert.NotEqual(pair.First.OutputDirectory, pair.Second.OutputDirectory);
+            });
     }
+
+    private static EvalSuiteRunner CreateRunner(TestWorkspace workspace, string outputRoot)
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero));
+        return new EvalSuiteRunner(
+            modesRoot => RuntimeTestHarness.CreateOrchestrator(workspace, clock, modesRoot: modesRoot),
+            outputRoot);
+    }
+
+    private static string Describe(EvalCaseResult result) =>
+        $"Case '{result.Case.SourcePath}' was {result.Status} (evaluation {result.ActualEvaluation}, " +
+        $"error '{result.ErrorMessage}'). Checks: " +
+        string.Join("; ", result.Checks.Select(check => $"{check.Name}: expected {check.Expected}, actual {check.Actual}")) +
+        ".";
 
     private static string[] ReportLines(string report) =>
         report.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
-
-    /// <summary>The pass or fail state of every report row named exactly <paramref name="name"/> (ordinal).</summary>
-    private static List<bool> FindCheckRows(string report, string name) =>
-        ReportLines(report)
-            .Where(line => line.StartsWith($"- [x] {name}: ", StringComparison.Ordinal) ||
-                line.StartsWith($"- [ ] {name}: ", StringComparison.Ordinal))
-            .Select(line => line[3] == 'x')
-            .ToList();
 
     /// <summary>
     /// An intentional failure must fail for its known reason and no other: the contract check is the only
@@ -131,15 +147,15 @@ public sealed class EvalCaseCorpusTests
     }
 
     /// <summary>A failed evaluation is still a completed run: every artifact, a manifest, and a sound trace.</summary>
-    private static async Task AssertCompletedRunArtifactsAsync(RunResult result, string context)
+    private static async Task AssertCompletedRunArtifactsAsync(string outputDirectory, string context)
     {
-        RuntimeTestHarness.AssertRequiredArtifactsExist(result.OutputDirectory);
-        Assert.True(File.Exists(Path.Combine(result.OutputDirectory, "pattern.md")), context);
+        RuntimeTestHarness.AssertRequiredArtifactsExist(outputDirectory);
+        Assert.True(File.Exists(Path.Combine(outputDirectory, "pattern.md")), context);
         using var manifest = JsonDocument.Parse(
-            await File.ReadAllTextAsync(Path.Combine(result.OutputDirectory, "run.json")));
+            await File.ReadAllTextAsync(Path.Combine(outputDirectory, "run.json")));
         Assert.Equal(JsonValueKind.Object, manifest.RootElement.ValueKind);
 
-        var trace = await new JsonTraceReader().ReadAsync(result.TracePath);
+        var trace = await new JsonTraceReader().ReadAsync(Path.Combine(outputDirectory, "trace.json"));
         var integrity = new TerminalTraceIntegrityEvaluator().Evaluate(trace.Events);
         Assert.True(integrity.Passed, $"{integrity.Details} {context}");
         Assert.Contains(trace.Events, traceEvent => traceEvent.Type == TraceEventNames.RunCompleted);

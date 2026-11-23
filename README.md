@@ -136,12 +136,39 @@ The schema covers the patterns that need only a mode and an input
 (`critic-revision` and `single-pass`); it has no pipeline stage or scatter
 branch list.
 
-There is no eval CLI command yet. The corpus is checked by tests, which run
-every case through the normal orchestrator and compare its expectations with
-the real eval report:
+`EvalSuiteRunner` in `CognitiveRuntime.Core` runs a list of loaded cases. The
+host gives it a function that creates the normal `Orchestrator` for a modes
+root, and an output root:
+
+```csharp
+var runner = new EvalSuiteRunner(modesRoot => CreateOrchestrator(modesRoot), outputRoot);
+EvalSuiteResult suite = await runner.RunAsync(cases, cancellationToken);
+```
+
+- Every case runs on the mock provider through `Orchestrator.RunAsync`, one at
+  a time, in ordinal order of its `SourcePath` written with `/` (the order a
+  directory loads in, the same on every OS), whatever order the list is in.
+- Each case's run is an ordinary run folder with the usual artifacts, under
+  `<outputRoot>/<mode>/<case-name>/`.
+- The runner compares the case with the structured evaluation the run returns
+  (`RunResult.Evaluation`, the same report written to `eval_report.md`); it
+  never parses Markdown.
+- `EvalSuiteResult` lists one `EvalCaseResult` per case in run order, with
+  `Passed`, `Failed`, and `Errored` counts. A case result holds the case, a
+  status, the actual evaluation, one expected/actual comparison per asserted
+  check in ordinal name order, an error message, and the run's output
+  directory. It has no timestamp, duration, or run ID, so two runs of the same
+  cases differ only in output directories.
+- `Passed` means the evaluation and every asserted check match. `Failed` means
+  the run completed but something did not match. `Error` means the case could
+  not be run to an evaluation (for example its mode does not load); the suite
+  records it and moves on. Only cancelling the suite's own token stops a suite.
+
+There is no eval CLI command or suite summary file yet. The corpus is checked
+by tests, which run every case through the runner:
 
 ```powershell
-dotnet test CognitiveRuntime.slnx --filter "FullyQualifiedName~EvalCase"
+dotnet test CognitiveRuntime.slnx --filter "FullyQualifiedName~EvalCase|FullyQualifiedName~EvalSuiteRunner"
 ```
 
 ## Validate A Mode

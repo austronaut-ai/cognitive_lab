@@ -38,7 +38,14 @@ public sealed record RunResult(
     string TracePath,
     string EvalReportPath,
     RunOutcome Outcome,
-    string? HtmlViewPath = null);
+    string? HtmlViewPath = null)
+{
+    /// <summary>
+    /// The structured evaluation the runtime rendered to <c>eval_report.md</c>, so a consumer compares
+    /// checks without parsing Markdown. Null when the producer of this result supplies none.
+    /// </summary>
+    public EvalReport? Evaluation { get; init; }
+}
 
 public enum ArtifactKind
 {
