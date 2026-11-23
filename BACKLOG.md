@@ -1356,14 +1356,22 @@ mode and runtime changes cannot be evaluated for regressions offline.
 Outcome: Data-driven, human-readable, network-free cases declare input, expected
 contract outcome, and expected invariants, including intentionally failing ones.
 
-Suggested layout:
+Status: Complete. Cases are JSON files loaded by `EvalCaseLoader`; the format is
+documented under "Offline Eval Cases" in `README.md`.
+
+Layout:
 
 ```text
 examples/evals/
   frame/
   challenge/
   synthesize/
+  lens/
+  _fixtures/modes/
 ```
+
+`_fixtures/` holds fixture data (modes whose contract the mock provider cannot
+satisfy), not cases.
 
 Each case should declare input, expected contract outcome, and expected runtime
 invariants.

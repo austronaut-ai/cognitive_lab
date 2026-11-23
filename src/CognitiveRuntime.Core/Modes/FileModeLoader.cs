@@ -610,7 +610,7 @@ public sealed class FileModeLoader : IModeLoader
     private static string FormatKind(PhaseKind kind) =>
         kind.ToString().ToLowerInvariant();
 
-    private const string NameRule =
+    internal const string NameRule =
         "use only ASCII letters, digits, or hyphens, starting with a letter or digit.";
 
     /// <summary>
@@ -618,7 +618,7 @@ public sealed class FileModeLoader : IModeLoader
     /// command-line option, so every listed lens can be passed as <c>--lens &lt;name&gt;</c> and none reads as a
     /// flag such as <c>-h</c>.
     /// </summary>
-    private static bool IsSafeName(string? name) =>
+    internal static bool IsSafeName(string? name) =>
         !string.IsNullOrEmpty(name) &&
         char.IsAsciiLetterOrDigit(name[0]) &&
         name.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');

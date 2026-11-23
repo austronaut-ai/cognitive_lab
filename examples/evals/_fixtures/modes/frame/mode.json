@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "name": "frame",
+  "description": "Eval fixture: the frame mode with an extra required heading the mock provider never writes.",
+  "version": 1,
+  "phases": [
+    {
+      "name": "main",
+      "kind": "main",
+      "prompt": "prompts/main.md"
+    },
+    {
+      "name": "critic",
+      "kind": "critic",
+      "prompt": "prompts/critic.md"
+    },
+    {
+      "name": "revision",
+      "kind": "revision",
+      "prompt": "prompts/revision.md"
+    }
+  ],
+  "outputContract": {
+    "requiredHeadings": [
+      "## Problem",
+      "## Objective",
+      "## Constraints",
+      "## Unknowns",
+      "## Next Actions",
+      "## Risks"
+    ],
+    "minimumLength": 200
+  }
+}

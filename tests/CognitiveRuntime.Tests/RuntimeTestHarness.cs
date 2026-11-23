@@ -25,12 +25,13 @@ internal static class RuntimeTestHarness
         IArtifactStore? artifactStore = null,
         IRunIdGenerator? runIdGenerator = null,
         RunBudget? budget = null,
-        int maxBranchConcurrency = 0)
+        int maxBranchConcurrency = 0,
+        string? modesRoot = null)
     {
         IModelClient[] modelClients = [modelClient ?? new MockModelClient()];
         runStateStore ??= new NullRunStateStore();
         artifactStore ??= new NullArtifactStore();
-        var modeLoader = new FileModeLoader(workspace.ModesRoot);
+        var modeLoader = new FileModeLoader(modesRoot ?? workspace.ModesRoot);
         var phaseRunner = new PhaseRunner(timeProvider);
         var artifactWriter = new ArtifactWriter(timeProvider, artifactStore);
 

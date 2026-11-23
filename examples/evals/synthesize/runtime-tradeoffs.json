@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "runtime-tradeoffs",
+  "description": "The shipped synthesize mode reconciles two positions and satisfies its output contract.",
+  "mode": "synthesize",
+  "input": "One view says the model should plan its own steps. Another says the runtime must own the loop. Reconcile them for a small lab runtime.",
+  "expect": {
+    "evaluation": "pass",
+    "checks": {
+      "required artifacts exist": "pass",
+      "output contract satisfied": "pass",
+      "declared plan execution": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}

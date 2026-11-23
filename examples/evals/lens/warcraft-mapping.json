@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "warcraft-mapping",
+  "description": "The shipped lens mode explains a concept through its warcraft lens and satisfies its output contract.",
+  "mode": "lens",
+  "lens": "warcraft",
+  "input": "Explain why a runtime should enforce an output contract instead of trusting the model to follow instructions.",
+  "expect": {
+    "evaluation": "pass",
+    "checks": {
+      "required artifacts exist": "pass",
+      "revision phase ran": "pass",
+      "output contract satisfied": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}

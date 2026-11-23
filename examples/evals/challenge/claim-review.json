@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "claim-review",
+  "description": "The shipped challenge mode stress-tests a claim and satisfies its output contract.",
+  "mode": "challenge",
+  "input": "Claim: a fixed main, critic, revision loop is enough to produce trustworthy reasoning artifacts.",
+  "expect": {
+    "evaluation": "pass",
+    "checks": {
+      "required artifacts exist": "pass",
+      "output contract satisfied": "pass",
+      "loop responded to critic findings": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}

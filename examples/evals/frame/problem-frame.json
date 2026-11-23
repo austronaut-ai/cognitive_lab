@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "problem-frame",
+  "description": "The shipped frame mode turns a file-backed intent into a frame that satisfies its output contract.",
+  "mode": "frame",
+  "inputFile": "problem-frame.txt",
+  "expect": {
+    "evaluation": "pass",
+    "checks": {
+      "required artifacts exist": "pass",
+      "critic phase ran": "pass",
+      "output contract satisfied": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}

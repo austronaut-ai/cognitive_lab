@@ -1,0 +1,3 @@
+Our team wants a small runtime that runs a fixed reasoning loop, records every
+step in a trace, and checks the result with deterministic evals. Frame what we
+are actually trying to build before anyone writes code.
