@@ -11,10 +11,17 @@ public enum PhaseKind
 
 public sealed record ModeManifest
 {
+    /// <summary>
+    /// The version of the <c>mode.json</c> format itself, not of the mode's content. The loader accepts only
+    /// <see cref="CognitiveRuntime.Core.Modes.FileModeLoader.SupportedSchemaVersion"/>; there is no default.
+    /// </summary>
+    public int SchemaVersion { get; init; }
+
     public string Name { get; init; } = string.Empty;
 
     public string Description { get; init; } = string.Empty;
 
+    /// <summary>The mode's content version, chosen by the mode author.</summary>
     public int Version { get; init; } = 1;
 
     public List<ModePhaseManifest> Phases { get; init; } = [];

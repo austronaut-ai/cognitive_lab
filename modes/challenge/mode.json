@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "name": "challenge",
   "description": "Stress-test a claim through assumptions, failure modes, and counterarguments.",
   "version": 1,

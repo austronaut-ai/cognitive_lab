@@ -391,6 +391,21 @@ public sealed class ModeValidationCliTests
     }
 
     [Fact]
+    public async Task Validate_UnsupportedManifestSchemaVersion_ReturnsOneWithSchemaDiagnostic()
+    {
+        using var workspace = new TestWorkspace();
+        var dir = workspace.CreateMode("frame");
+        ReplaceInManifest(dir, "\"schemaVersion\": 1", "\"schemaVersion\": 2");
+        var before = Snapshot(workspace.Root);
+
+        var result = await RunValidateAsync(workspace);
+
+        AssertRejected(result, "field 'schemaVersion' is 2; this runtime supports only schemaVersion 1");
+        Assert.Contains(Path.Combine(dir, "mode.json"), result.Err);
+        Assert.Equal(before, Snapshot(workspace.Root));
+    }
+
+    [Fact]
     public async Task Validate_MistypedManifestField_ReturnsOneNamingField()
     {
         using var workspace = new TestWorkspace();

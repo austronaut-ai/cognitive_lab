@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "name": "frame",
   "description": "Turn ambiguous intent into an explicit, testable problem frame.",
   "version": 1,
