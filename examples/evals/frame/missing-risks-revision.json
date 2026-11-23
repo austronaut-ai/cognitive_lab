@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "missing-risks-revision",
+  "description": "Intentional failure: the fixture frame mode also requires '## Risks', which the mock revision never writes.",
+  "mode": "frame",
+  "modesRoot": "../_fixtures/modes",
+  "input": "Frame the rollout of a deterministic regression corpus for the runtime.",
+  "expect": {
+    "evaluation": "fail",
+    "checks": {
+      "output contract satisfied": "fail",
+      "required artifacts exist": "pass",
+      "critic phase ran": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}

@@ -63,6 +63,87 @@ files expose each phase's raw output for inspection and are listed in
 `run.json` and traced as artifact writes. For `linear-pipeline`, each stage
 writes its own `stages/NN-<mode>/phases/NN-<phase>.md`.
 
+## Offline Eval Cases
+
+`examples/evals/` is a small regression corpus: one JSON file per case, at
+`examples/evals/<mode>/<case-name>.json`. A case declares an input, the mode to
+run it through, and what the run's `eval_report.md` must say. Cases always run
+on the mock provider, so none needs credentials or network access; there is
+deliberately no provider or run-mode field.
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "problem-frame",
+  "description": "The shipped frame mode turns a file-backed intent into a frame that satisfies its output contract.",
+  "mode": "frame",
+  "inputFile": "problem-frame.txt",
+  "expect": {
+    "evaluation": "pass",
+    "checks": {
+      "required artifacts exist": "pass",
+      "critic phase ran": "pass",
+      "output contract satisfied": "pass",
+      "model call pairing": "pass"
+    }
+  }
+}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | yes | The integer `1`. Anything else (missing, `2`, `"1"`, `1.0`) is rejected, as for `mode.json`. |
+| `name` | yes | Must equal the file name without `.json`. |
+| `description` | yes | What the case covers, for a human reader. |
+| `mode` | yes | The mode to run. |
+| `lens` | no | The lens to run the mode with (for example `warcraft` for `lens`). |
+| `pattern` | no | The orchestration pattern. Defaults to `critic-revision`, the CLI default. |
+| `input` | one of | The input text, inline. |
+| `inputFile` | one of | A file holding the input text. Declare exactly one of `input` and `inputFile`. |
+| `modesRoot` | no | A modes directory to load `mode` from instead of the repository `modes/`. |
+| `expect.evaluation` | yes | `"pass"` or `"fail"`: the report's overall result. |
+| `expect.checks` | yes | Check name to `"pass"` or `"fail"`. May be `{}`. |
+
+Rules the loader (`EvalCaseLoader` in `CognitiveRuntime.Core`) enforces, each
+reported with the path of the case file:
+
+- Unknown properties are rejected, at the top level and inside `expect`.
+- `inputFile` and `modesRoot` are relative to the case file. They may use `..`
+  but must resolve inside `examples/evals`; rooted paths and symbolic links or
+  junctions are rejected. `inputFile` must be a non-empty file and `modesRoot`
+  a directory, which may be `examples/evals` itself.
+- One load reports every problem it can: a bad `inputFile` or `modesRoot` is
+  reported alongside unrelated schema problems in the same file, and a
+  directory load reports the problems of every file.
+- A check name is written exactly as it appears in `eval_report.md`, after the
+  checkbox and before the colon, for example `output contract satisfied`,
+  `model call pairing`, `declared plan execution`, `critic phase ran`, or
+  `required artifacts exist`. A case lists only the checks it asserts; a listed
+  check that the run's report does not contain is a failure.
+- A directory of cases loads in ordinal order of each file's path relative to
+  `examples/evals`.
+
+The corpus has passing cases for `frame`, `challenge`, `synthesize`, and `lens`
+(with the `warcraft` lens), and intentionally failing ones. The mock provider
+answers each shipped mode with fixed text that satisfies the shipped contract,
+so a failing case points `modesRoot` at a fixture mode under
+`examples/evals/_fixtures/modes/`: a copy of `frame` whose output contract also
+requires `## Risks`, a heading the mock never writes. Such a case expects
+`"evaluation": "fail"` and `"output contract satisfied": "fail"`.
+`_fixtures/` holds fixture data only; no case is loaded from it.
+
+The schema covers the patterns that need only a mode and an input
+(`critic-revision` and `single-pass`); it has no pipeline stage or scatter
+branch list.
+
+There is no eval CLI command yet. The corpus is checked by tests, which run
+every case through the normal orchestrator and compare its expectations with
+the real eval report:
+
+```powershell
+dotnet test CognitiveRuntime.slnx --filter "FullyQualifiedName~EvalCase"
+```
+
 ## Validate A Mode
 
 Check a mode without a run:
